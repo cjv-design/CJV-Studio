@@ -314,7 +314,7 @@ pub fn read_as_shot_white_balance(file_bytes: &[u8]) -> Option<WhiteBalance> {
     // Rawler sets their rendering multipliers to unity, which must not be used
     // to infer the original illuminant. Keep pixel development unchanged.
     let metadata_coeffs = if is_linear_raw_format(&raw_image)
-        && raw_image.make.eq_ignore_ascii_case("sony")
+        && decoder.format_hint() == rawler::decoders::FormatHint::ARW
     {
         crate::sony_white_balance::read_coefficients(file_bytes)?
     } else {
