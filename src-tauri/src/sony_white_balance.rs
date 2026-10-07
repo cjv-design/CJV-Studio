@@ -86,7 +86,7 @@ pub fn read_coefficients(file: &[u8]) -> Option<[f32; 4]> {
     let length = scalar(file, private, 0x7201)? as usize;
     let key = scalar(file, private, 0x7221)?;
     // Camera metadata is small. Reject corrupt sizes before allocating a buffer.
-    if length == 0 || length > 1024 * 1024 || length % 4 != 0 {
+    if length < 4 || length > 1024 * 1024 {
         return None;
     }
     let decoded = decode_sr2(file.get(offset..offset.checked_add(length)?)?, key);
@@ -201,5 +201,15 @@ mod tests {
             data[128..].copy_from_slice(&decode_sr2(&clear, 0x1234abcd));
             assert!(read_coefficients(&data).is_none());
         }
+    }
+
+    #[test]
+    fn accepts_sr2_blocks_with_unencrypted_trailing_bytes() {
+        // Sony ILCE-7RM5 blocks can end with two bytes beyond the last word.
+        let mut data = fixture(false, true);
+        data.extend_from_slice(&[0, 0]);
+        put_entry(&mut data, 46, 0x7201, 4, 1, 66);
+        let result = read_coefficients(&data).unwrap();
+        assert_eq!(&result[..3], &[2.0, 1.0, 1.5]);
     }
 }
