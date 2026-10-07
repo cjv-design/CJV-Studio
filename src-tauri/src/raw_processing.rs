@@ -186,6 +186,14 @@ fn develop_internal(
     let mut developer = RawDevelop::default();
 
     if is_linear_format {
+        // Linear RAWs skip demosaicing, so RawDevelop has not cropped the
+        // active area. Keep the default crop in full-image coordinates and
+        // prevent its scale calculation from expanding into padded Sony tiles.
+        let active_area = raw_image.active_area.take();
+        raw_image.crop_area = match (raw_image.crop_area, active_area) {
+            (Some(crop), Some(active)) => Some(crop.intersection(&active)),
+            (crop, active) => crop.or(active),
+        };
         developer.steps.retain(|&step| {
             step != ProcessingStep::SRgb
                 && step != ProcessingStep::Demosaic
