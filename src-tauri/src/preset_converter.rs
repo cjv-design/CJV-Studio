@@ -172,7 +172,10 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
         }
     }
     if !calibration_map.is_empty() {
-        adjustments.insert("colorCalibration".to_string(), Value::Object(calibration_map));
+        adjustments.insert(
+            "colorCalibration".to_string(),
+            Value::Object(calibration_map),
+        );
     }
 
     if let Some(shadows_val) = get_attr_as_f64(&attrs, "Shadows2012") {
@@ -416,8 +419,7 @@ mod tests {
 
     #[test]
     fn preset_without_calibration_keeps_existing_import_shape() {
-        let preset =
-            convert_xmp_to_preset(r#"<rdf:Description crs:Contrast2012="+8"/>"#).unwrap();
+        let preset = convert_xmp_to_preset(r#"<rdf:Description crs:Contrast2012="+8"/>"#).unwrap();
 
         assert_eq!(preset.adjustments, json!({ "contrast": 8 }));
     }
@@ -448,8 +450,7 @@ mod tests {
             preset.adjustments["colorCalibration"],
             json!({ "blueHue": -100 })
         );
-        let invalid_only =
-            convert_xmp_to_preset(r#"<rdf:Description crs:RedHue="NaN"/>"#).unwrap();
+        let invalid_only = convert_xmp_to_preset(r#"<rdf:Description crs:RedHue="NaN"/>"#).unwrap();
         assert!(invalid_only.adjustments.get("colorCalibration").is_none());
     }
 
@@ -461,7 +462,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(preset.adjustments["colorCalibration"], json!({ "redHue": 32 }));
+        assert_eq!(
+            preset.adjustments["colorCalibration"],
+            json!({ "redHue": 32 })
+        );
         assert_eq!(preset.adjustments["hsl"]["reds"]["hue"], json!(9.0));
         assert_eq!(
             preset.adjustments["colorGrading"]["shadows"],
