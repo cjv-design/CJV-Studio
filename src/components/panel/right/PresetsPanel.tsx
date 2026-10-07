@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { mergePresetCalibration, scalePresetCalibration } from '../../../utils/presetCalibration';
+import { mixPresetWhiteBalance } from '../../../utils/presetWhiteBalance';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import {
   DndContext,
@@ -341,6 +342,13 @@ function PresetItemDisplay({
             onPointerDown={(e: any) => e.stopPropagation()}
           >
             <div className="mt-3 px-1 pb-1">
+              {Array.isArray(preset.adjustments?.xmpImportNotes) && (
+                <div className="mb-2 text-xs text-amber-300" role="note">
+                  {preset.adjustments.xmpImportNotes.filter((note: unknown) => typeof note === 'string').map((note: string) => (
+                    <p key={note}>{note}</p>
+                  ))}
+                </div>
+              )}
               <Slider
                 min={0}
                 max={200}
@@ -903,6 +911,7 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
     setAdjustments((prevAdjustments: Adjustments) => ({
       ...prevAdjustments,
       ...preset.adjustments,
+      ...mixPresetWhiteBalance(prevAdjustments, preset.adjustments, selectedImage?.asShotWhiteBalance, 100),
       colorCalibration: mergePresetCalibration(
         prevAdjustments.colorCalibration || INITIAL_ADJUSTMENTS.colorCalibration,
         preset.adjustments.colorCalibration,
@@ -917,13 +926,14 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         ...mixed,
+        ...mixPresetWhiteBalance(baseAdjustments ?? prev, preset.adjustments, selectedImage?.asShotWhiteBalance, intensity),
         colorCalibration: mergePresetCalibration(
           prev.colorCalibration || INITIAL_ADJUSTMENTS.colorCalibration,
           scalePresetCalibration(preset.adjustments.colorCalibration, intensity),
         ),
       }));
     },
-    [setAdjustments],
+    [setAdjustments, baseAdjustments, selectedImage?.asShotWhiteBalance],
   );
 
   const handleSaveConfiguredPreset = async (

@@ -56,6 +56,7 @@ mod panorama_stitching;
 mod panorama_utils;
 mod preset_converter;
 mod raw_processing;
+mod sony_white_balance;
 mod tagging;
 mod tagging_utils;
 mod white_balance;

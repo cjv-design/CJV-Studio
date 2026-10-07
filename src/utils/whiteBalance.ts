@@ -35,7 +35,7 @@ export const getWhiteBalanceMode = (settings: AppSettings | null | undefined): W
   settings?.whiteBalanceMode ?? WhiteBalanceMode.Relative;
 
 export const resolveWhiteBalance = (asShot: WhiteBalance, adjustments: WhiteBalanceAdjustments): WhiteBalance => {
-  const base = adjustments.whiteBalance ?? asShot;
+  const base = { ...asShot, ...adjustments.whiteBalance };
   const temperature = adjustments.temperature || 0;
   const tint = adjustments.tint || 0;
   if (temperature === 0 && tint === 0) {

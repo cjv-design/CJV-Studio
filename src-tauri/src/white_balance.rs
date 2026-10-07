@@ -237,14 +237,21 @@ pub fn rgb_to_lms() -> Mat3 {
 }
 
 pub fn from_adjustments(adjustments: &Value, as_shot: WhiteBalance) -> WhiteBalance {
-    adjustments
-        .get("whiteBalance")
-        .and_then(|v| serde_json::from_value::<WhiteBalance>(v.clone()).ok())
-        .unwrap_or(as_shot)
-        .shifted(
-            adjustments["temperature"].as_f64().unwrap_or(0.0),
-            adjustments["tint"].as_f64().unwrap_or(0.0),
-        )
+    let wb = &adjustments["whiteBalance"];
+    WhiteBalance {
+        temperature: wb["temperature"]
+            .as_f64()
+            .filter(|v| v.is_finite() && (MIN_TEMPERATURE..=MAX_TEMPERATURE).contains(v))
+            .unwrap_or(as_shot.temperature),
+        tint: wb["tint"]
+            .as_f64()
+            .filter(|v| v.is_finite() && (-MAX_TINT..=MAX_TINT).contains(v))
+            .unwrap_or(as_shot.tint),
+    }
+    .shifted(
+        adjustments["temperature"].as_f64().unwrap_or(0.0),
+        adjustments["tint"].as_f64().unwrap_or(0.0),
+    )
 }
 
 pub fn pick_white_balance(sample: [f64; 3], current: WhiteBalance) -> Option<WhiteBalance> {

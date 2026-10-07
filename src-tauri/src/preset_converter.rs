@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::file_management::Preset;
-use crate::white_balance::{MIRED_PER_RELATIVE_UNIT, TINT_PER_RELATIVE_UNIT};
 
 #[derive(Copy, Clone, Debug)]
 enum Num {
@@ -34,6 +33,7 @@ fn get_attr_as_f64(attrs: &HashMap<String, String>, key: &str) -> Option<f64> {
     attrs
         .get(key)
         .and_then(|s| s.trim_start_matches('+').parse::<f64>().ok())
+        .filter(|v| v.is_finite())
 }
 
 fn extract_xmp_name(xmp_content: &str) -> Option<String> {
@@ -92,11 +92,16 @@ fn extract_tone_curve_points(xmp_str: &str, curve_name: &str) -> Option<Vec<Valu
 }
 
 pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
-    let xmp_one_line = xmp_content.split('\n').collect::<Vec<_>>().join(" ");
-
+    // Only the preset's outer settings belong here. Nested Look/Parameters
+    // descriptions can contain their own exposure, WB, and tonal settings.
+    let outer = regex!(r"(?s)<rdf:Description\b([^>]*)>")
+        .captures(xmp_content)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str())
+        .ok_or("XMP has no settings description")?;
     let attr_re = regex!(r#"crs:([A-Za-z0-9]+)="([^"]*)""#);
     let mut attrs: HashMap<String, String> = HashMap::new();
-    for cap in attr_re.captures_iter(&xmp_one_line) {
+    for cap in attr_re.captures_iter(outer) {
         attrs.insert(cap[1].to_string(), cap[2].to_string());
     }
 
@@ -191,22 +196,30 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
         );
     }
 
-    if let Some(adjusted_k) = get_attr_as_f64(&attrs, "Temperature") {
-        const AS_SHOT_DEFAULT: f64 = 5500.0;
-        let as_shot_k = get_attr_as_f64(&attrs, "AsShotTemperature").unwrap_or(AS_SHOT_DEFAULT);
-        let mired_adjusted = 1_000_000.0 / adjusted_k;
-        let mired_as_shot = 1_000_000.0 / as_shot_k;
-        let mired_delta = mired_adjusted - mired_as_shot;
-        let temp_value = -mired_delta / MIRED_PER_RELATIVE_UNIT;
-        adjustments.insert(
-            "temperature".to_string(),
-            json!(temp_value.clamp(-100.0, 100.0)),
-        );
-    }
-
-    if let Some(tint_val) = get_attr_as_f64(&attrs, "Tint") {
-        let scaled_tint = tint_val / TINT_PER_RELATIVE_UNIT;
-        adjustments.insert("tint".to_string(), json!(scaled_tint.clamp(-100.0, 100.0)));
+    let wb_mode = attrs.get("WhiteBalance").map(String::as_str);
+    if wb_mode == Some("As Shot") {
+        adjustments.insert("whiteBalance".to_string(), Value::Null);
+        adjustments.insert("temperature".to_string(), json!(0));
+        adjustments.insert("tint".to_string(), json!(0));
+    } else if wb_mode != Some("Auto") {
+        // Adobe Temperature/Tint are absolute values, not offsets from the
+        // reference photo saved in the preset. Native rendering supports Kelvin.
+        let mut wb = Map::new();
+        if let Some(value) = get_attr_as_f64(&attrs, "Temperature")
+            && (2000.0..=50000.0).contains(&value)
+        {
+            wb.insert("temperature".to_string(), json!(value));
+        }
+        if let Some(value) = get_attr_as_f64(&attrs, "Tint")
+            && (-150.0..=150.0).contains(&value)
+        {
+            wb.insert("tint".to_string(), json!(value));
+        }
+        if !wb.is_empty() {
+            adjustments.insert("whiteBalance".to_string(), Value::Object(wb));
+            adjustments.insert("temperature".to_string(), json!(0));
+            adjustments.insert("tint".to_string(), json!(0));
+        }
     }
 
     let colors = [
@@ -365,6 +378,30 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
     let preset_name =
         extract_xmp_name(xmp_content).unwrap_or_else(|| "Imported Preset".to_string());
 
+    let mut import_notes = Vec::new();
+    if xmp_content.contains("<crs:Look") || attrs.contains_key("RGBTable") {
+        import_notes
+            .push("The Adobe film profile is not applied. Colours will differ from Lightroom.");
+    }
+    if wb_mode == Some("Auto") {
+        import_notes
+            .push("Adobe Auto white balance is not supported; existing white balance is kept.");
+    }
+    if [
+        "ParametricShadows",
+        "ParametricDarks",
+        "ParametricLights",
+        "ParametricHighlights",
+    ]
+    .iter()
+    .any(|key| get_attr_as_f64(&attrs, key).is_some_and(|v| v != 0.0))
+    {
+        import_notes.push("The parametric tone curve is not applied; the point curve is imported.");
+    }
+    if !import_notes.is_empty() {
+        adjustments.insert("xmpImportNotes".to_string(), json!(import_notes));
+    }
+
     Ok(Preset {
         id: Uuid::new_v4().to_string(),
         name: preset_name,
@@ -378,6 +415,66 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn white_balance_is_absolute_and_independent_of_preset_reference_photo() {
+        for reference in [
+            "",
+            r#"crs:AsShotTemperature="5000" crs:AsShotTint="19""#,
+            r#"crs:AsShotTemperature="8500" crs:AsShotTint="-20""#,
+        ] {
+            let xmp = format!(
+                r#"<rdf:Description crs:WhiteBalance="Custom" crs:Temperature="4863" crs:Tint="19" {reference}/>"#
+            );
+            let result = convert_xmp_to_preset(&xmp).unwrap().adjustments;
+            assert_eq!(
+                result["whiteBalance"],
+                json!({"temperature":4863.0,"tint":19.0})
+            );
+            assert_eq!(result["temperature"], 0);
+            assert_eq!(result["tint"], 0);
+        }
+    }
+
+    #[test]
+    fn as_shot_resets_wb_but_auto_does_not_invent_an_algorithm() {
+        let shot = convert_xmp_to_preset(
+            r#"<rdf:Description crs:WhiteBalance="As Shot" crs:Temperature="6000" crs:Tint="20"/>"#,
+        )
+        .unwrap()
+        .adjustments;
+        assert_eq!(shot, json!({"whiteBalance":null,"temperature":0,"tint":0}));
+        let auto = convert_xmp_to_preset(
+            r#"<rdf:Description crs:WhiteBalance="Auto" crs:Temperature="6000" crs:Tint="20"/>"#,
+        )
+        .unwrap()
+        .adjustments;
+        assert!(auto.get("whiteBalance").is_none());
+    }
+
+    #[test]
+    fn partial_wb_and_invalid_values_do_not_invent_reference_values() {
+        let partial = convert_xmp_to_preset(r#"<rdf:Description crs:Tint="-12"/>"#)
+            .unwrap()
+            .adjustments;
+        assert_eq!(partial["whiteBalance"], json!({"tint":-12.0}));
+        for invalid in ["NaN", "inf", "0", "-100", "60000", "bad"] {
+            let xmp =
+                format!(r#"<rdf:Description crs:Temperature="{invalid}" crs:Tint="Infinity"/>"#);
+            assert_eq!(convert_xmp_to_preset(&xmp).unwrap().adjustments, json!({}));
+        }
+    }
+
+    #[test]
+    fn nested_profile_settings_cannot_overwrite_outer_preset_settings() {
+        let result = convert_xmp_to_preset(r#"<rdf:Description crs:Exposure2012="0.13" crs:Temperature="4863" crs:Tint="19"><crs:Look><rdf:Description crs:Exposure2012="2" crs:Temperature="8500" crs:Tint="-50"/></crs:Look></rdf:Description>"#).unwrap().adjustments;
+        assert_eq!(result["exposure"], json!(0.13));
+        assert_eq!(result["xmpImportNotes"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            result["whiteBalance"],
+            json!({"temperature":4863.0,"tint":19.0})
+        );
+    }
 
     #[test]
     fn imports_all_camera_calibration_fields_in_ui_units() {

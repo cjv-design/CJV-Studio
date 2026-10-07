@@ -12,10 +12,8 @@ pub mod file_management {
     }
 }
 
-pub mod white_balance {
-    pub const MIRED_PER_RELATIVE_UNIT: f64 = 1.5;
-    pub const TINT_PER_RELATIVE_UNIT: f64 = 1.5;
-}
-
 #[path = "../../../src-tauri/src/preset_converter.rs"]
 pub mod preset_converter;
+
+#[path = "../../../src-tauri/src/sony_white_balance.rs"]
+pub mod sony_white_balance;
