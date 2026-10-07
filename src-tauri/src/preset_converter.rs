@@ -151,6 +151,30 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
         }
     }
 
+    // Preserve only the Calibration fields included in the Adobe preset.
+    // The renderer consumes the same UI units, but its colour maths differs
+    // from Adobe's; this mapping does not promise identical rendered colours.
+    let mut calibration_map = Map::new();
+    for (xmp_key, rr_key) in [
+        ("ShadowTint", "shadowsTint"),
+        ("RedHue", "redHue"),
+        ("RedSaturation", "redSaturation"),
+        ("GreenHue", "greenHue"),
+        ("GreenSaturation", "greenSaturation"),
+        ("BlueHue", "blueHue"),
+        ("BlueSaturation", "blueSaturation"),
+    ] {
+        if let Some(raw_val) = attrs.get(xmp_key)
+            && let Some(num) = parse_num(raw_val.trim_start_matches('+'))
+            && let Some(json_val) = num_to_json(num)
+        {
+            calibration_map.insert(rr_key.to_string(), json_val);
+        }
+    }
+    if !calibration_map.is_empty() {
+        adjustments.insert("colorCalibration".to_string(), Value::Object(calibration_map));
+    }
+
     if let Some(shadows_val) = get_attr_as_f64(&attrs, "Shadows2012") {
         let adjusted_shadows = (shadows_val * 1.5).min(100.0);
         adjustments.insert("shadows".to_string(), json!(adjusted_shadows));
@@ -346,4 +370,102 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
         include_crop_transform: Some(false),
         preset_type: Some("style".to_string()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imports_all_camera_calibration_fields_in_ui_units() {
+        let preset = convert_xmp_to_preset(
+            r#"<rdf:Description crs:ShadowTint="-12" crs:RedHue="+24"
+                crs:RedSaturation="-35" crs:GreenHue="+46"
+                crs:GreenSaturation="-57" crs:BlueHue="+68"
+                crs:BlueSaturation="-79"/>"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            preset.adjustments["colorCalibration"],
+            json!({
+                "shadowsTint": -12,
+                "redHue": 24,
+                "redSaturation": -35,
+                "greenHue": 46,
+                "greenSaturation": -57,
+                "blueHue": 68,
+                "blueSaturation": -79,
+            })
+        );
+    }
+
+    #[test]
+    fn partial_calibration_does_not_reset_omitted_controls() {
+        let preset = convert_xmp_to_preset(
+            r#"<rdf:Description crs:Exposure2012="+1.25" crs:BlueHue="-22.5"/>"#,
+        )
+        .unwrap();
+
+        assert_eq!(preset.adjustments["exposure"], json!(1.25));
+        assert_eq!(
+            preset.adjustments["colorCalibration"],
+            json!({ "blueHue": -22.5 })
+        );
+    }
+
+    #[test]
+    fn preset_without_calibration_keeps_existing_import_shape() {
+        let preset =
+            convert_xmp_to_preset(r#"<rdf:Description crs:Contrast2012="+8"/>"#).unwrap();
+
+        assert_eq!(preset.adjustments, json!({ "contrast": 8 }));
+    }
+
+    #[test]
+    fn explicit_zero_calibration_values_are_preserved() {
+        let preset = convert_xmp_to_preset(
+            r#"<rdf:Description crs:ShadowTint="0" crs:RedHue="+0" crs:BlueSaturation="0"/>"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            preset.adjustments["colorCalibration"],
+            json!({ "shadowsTint": 0, "redHue": 0, "blueSaturation": 0 })
+        );
+    }
+
+    #[test]
+    fn ignores_malformed_and_non_finite_calibration_values() {
+        let preset = convert_xmp_to_preset(
+            r#"<rdf:Description crs:ShadowTint="NaN" crs:RedHue="Infinity"
+                crs:RedSaturation="invalid" crs:GreenHue="-inf"
+                crs:GreenSaturation="" crs:BlueHue="-100"/>"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            preset.adjustments["colorCalibration"],
+            json!({ "blueHue": -100 })
+        );
+        let invalid_only =
+            convert_xmp_to_preset(r#"<rdf:Description crs:RedHue="NaN"/>"#).unwrap();
+        assert!(invalid_only.adjustments.get("colorCalibration").is_none());
+    }
+
+    #[test]
+    fn calibration_does_not_replace_hsl_or_colour_grading() {
+        let preset = convert_xmp_to_preset(
+            r#"<rdf:Description crs:RedHue="+32" crs:HueAdjustmentRed="+12"
+                crs:SplitToningShadowHue="240" crs:SplitToningShadowSaturation="10"/>"#,
+        )
+        .unwrap();
+
+        assert_eq!(preset.adjustments["colorCalibration"], json!({ "redHue": 32 }));
+        assert_eq!(preset.adjustments["hsl"]["reds"]["hue"], json!(9.0));
+        assert_eq!(
+            preset.adjustments["colorGrading"]["shadows"],
+            json!({ "hue": 240, "saturation": 10 })
+        );
+    }
 }

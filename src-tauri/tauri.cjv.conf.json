@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CJV Studio Alpha",
+  "identifier": "au.com.cameronjonesvisuals.cjvstudio.alpha",
+  "version": "0.1.0",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "create": false,
+        "title": "CJV Studio Alpha",
+        "width": 1280,
+        "height": 720,
+        "minWidth": 800,
+        "minHeight": 600,
+        "transparent": true,
+        "decorations": false
+      }
+    ]
+  },
+  "bundle": {
+    "fileAssociations": [],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

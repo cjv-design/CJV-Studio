@@ -1,0 +1,96 @@
+name: CJV Windows Alpha
+
+on:
+  push:
+    branches:
+      - cjv/calibration-import
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: Unchanged Windows baseline
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8387fc12097a541093d796bf216c6e831f9ba5c0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ''
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: cjv-windows-alpha
+      - name: Install locked frontend dependencies
+        run: npm ci
+      - name: Record baseline type-check diagnostics
+        shell: pwsh
+        run: |
+          npm run typecheck 2>&1 | Tee-Object -FilePath baseline-typecheck.txt
+          "Baseline type-check exit code: $LASTEXITCODE" >> baseline-typecheck.txt
+          exit 0
+      - name: Build unchanged Windows application
+        run: npm run tauri -- build --no-bundle
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unchanged-baseline-diagnostics
+          path: baseline-typecheck.txt
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unchanged-windows-baseline
+          path: src-tauri/target/release/RapidRAW.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  alpha:
+    name: Calibration tests and CJV Windows installer
+    needs: baseline
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ''
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: cjv-windows-alpha
+      - name: Install locked frontend dependencies
+        run: npm ci
+      - name: Check importer formatting
+        run: rustfmt --edition 2024 --check src-tauri/src/preset_converter.rs
+      - name: Test the production XMP converter
+        working-directory: src-tauri
+        run: cargo test --locked --release --lib preset_converter::tests
+      - name: Build isolated CJV Windows installer
+        run: npm run tauri -- build --config src-tauri/tauri.cjv.conf.json --bundles nsis
+      - name: Record installer checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe |
+            Get-FileHash -Algorithm SHA256 |
+            Format-List | Out-File installer-sha256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CJV-Studio-Alpha-0.1.0-Windows
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            installer-sha256.txt
+          if-no-files-found: error
+          retention-days: 14
