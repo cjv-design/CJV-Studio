@@ -58,29 +58,9 @@ fn extract_tone_curve_points(xmp_str: &str, curve_name: &str) -> Option<Vec<Valu
         let x: u32 = point_cap.get(1)?.as_str().parse().ok()?;
         let y: u32 = point_cap.get(2)?.as_str().parse().ok()?;
 
-        let mut final_y = y;
-        if curve_name == "ToneCurvePV2012" {
-            const SHADOW_RANGE_END: f64 = 64.0;
-            const SHADOW_DAMPEN_START: f64 = 0.8;
-            const SHADOW_DAMPEN_END: f64 = 1.0;
-
-            let x_f64 = x as f64;
-            let y_f64 = y as f64;
-
-            if y_f64 > x_f64 && x_f64 < SHADOW_RANGE_END {
-                let lift_amount = y_f64 - x_f64;
-                let progress = x_f64 / SHADOW_RANGE_END;
-                let dampening_factor =
-                    SHADOW_DAMPEN_START + (SHADOW_DAMPEN_END - SHADOW_DAMPEN_START) * progress;
-
-                let new_y = x_f64 + (lift_amount * dampening_factor);
-                final_y = new_y.round().clamp(0.0, 255.0) as u32;
-            }
-        }
-
         let mut point = Map::new();
         point.insert("x".to_string(), Value::Number(x.into()));
-        point.insert("y".to_string(), Value::Number(final_y.into()));
+        point.insert("y".to_string(), Value::Number(y.into()));
         points.push(Value::Object(point));
     }
 
@@ -366,8 +346,9 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
         ("ToneCurvePV2012Green", "green"),
         ("ToneCurvePV2012Blue", "blue"),
     ];
+    let preset_content = regex!(r"(?s)<crs:Look\b.*?</crs:Look>").replace_all(xmp_content, "");
     for (xmp_curve, rr_curve) in curve_mappings {
-        if let Some(points) = extract_tone_curve_points(xmp_content, xmp_curve) {
+        if let Some(points) = extract_tone_curve_points(&preset_content, xmp_curve) {
             curves_map.insert(rr_curve.to_string(), Value::Array(points));
         }
     }
@@ -376,7 +357,7 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
     }
 
     let preset_name =
-        extract_xmp_name(xmp_content).unwrap_or_else(|| "Imported Preset".to_string());
+        extract_xmp_name(&preset_content).unwrap_or_else(|| "Imported Preset".to_string());
 
     let mut import_notes = Vec::new();
     if xmp_content.contains("<crs:Look") || attrs.contains_key("RGBTable") {
@@ -387,6 +368,25 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
         import_notes
             .push("Adobe Auto white balance is not supported; existing white balance is kept.");
     }
+    let mut parametric = Map::new();
+    for (src, dst, default, min, max) in [
+        ("ParametricShadows", "shadows", 0.0, -100.0, 100.0),
+        ("ParametricDarks", "darks", 0.0, -100.0, 100.0),
+        ("ParametricLights", "lights", 0.0, -100.0, 100.0),
+        ("ParametricHighlights", "highlights", 0.0, -100.0, 100.0),
+        ("ParametricShadowSplit", "split1", 25.0, 1.0, 97.0),
+        ("ParametricMidtoneSplit", "split2", 50.0, 2.0, 98.0),
+        ("ParametricHighlightSplit", "split3", 75.0, 3.0, 99.0),
+    ] {
+        parametric.insert(
+            dst.into(),
+            json!(
+                get_attr_as_f64(&attrs, src)
+                    .unwrap_or(default)
+                    .clamp(min, max)
+            ),
+        );
+    }
     if [
         "ParametricShadows",
         "ParametricDarks",
@@ -394,9 +394,11 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
         "ParametricHighlights",
     ]
     .iter()
-    .any(|key| get_attr_as_f64(&attrs, key).is_some_and(|v| v != 0.0))
+    .any(|key| attrs.contains_key(*key))
     {
-        import_notes.push("The parametric tone curve is not applied; the point curve is imported.");
+        parametric.insert("amount".into(), json!(1.0));
+        adjustments.insert("xmpParametricCurve".into(), Value::Object(parametric));
+        import_notes.push("The imported tone curve uses CJV's response and is approximate. Its strength is adjustable under Curves.");
     }
     if !import_notes.is_empty() {
         adjustments.insert("xmpImportNotes".to_string(), json!(import_notes));
@@ -415,6 +417,20 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn point_curve_black_lift_and_parametric_curve_are_both_preserved() {
+        let preset = convert_xmp_to_preset(r#"<rdf:Description crs:ParametricShadows="-65" crs:ParametricDarks="5" crs:ParametricHighlights="-40" crs:ParametricShadowSplit="20" crs:ParametricHighlightSplit="86"><crs:ToneCurvePV2012><rdf:Seq><rdf:li>0, 13</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></crs:ToneCurvePV2012></rdf:Description>"#).unwrap().adjustments;
+        assert_eq!(preset["curves"]["luma"][0], json!({"x":0,"y":13}));
+        assert_eq!(preset["xmpParametricCurve"]["shadows"], json!(-65.0));
+        assert_eq!(preset["xmpParametricCurve"]["split3"], json!(86.0));
+    }
+
+    #[test]
+    fn profile_curve_is_not_mistaken_for_the_presets_point_curve() {
+        let p = convert_xmp_to_preset(r#"<rdf:Description><crs:Look><rdf:Description><crs:ToneCurvePV2012><rdf:Seq><rdf:li>0, 30</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></crs:ToneCurvePV2012></rdf:Description></crs:Look></rdf:Description>"#).unwrap();
+        assert!(p.adjustments.get("curves").is_none());
+    }
 
     #[test]
     fn white_balance_is_absolute_and_independent_of_preset_reference_photo() {

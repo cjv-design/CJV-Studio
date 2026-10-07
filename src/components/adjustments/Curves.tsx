@@ -810,6 +810,21 @@ export default function CurveGraph({
 
   return (
     <div className="select-none touch-none" ref={containerRef}>
+      {adjustments.xmpParametricCurve && (
+        <div className="mb-4">
+          <Slider
+            label="Imported tone curve"
+            min={0} max={200} step={1} defaultValue={100}
+            value={(adjustments.xmpParametricCurve.amount ?? 1) * 100}
+            onChange={(e: any) => setAdjustments((prev: any) => ({
+              ...prev,
+              xmpParametricCurve: { ...prev.xmpParametricCurve, amount: Number(e.target.value) / 100 },
+            }))}
+            onDragStateChange={onDragStateChange}
+          />
+          <p className="text-xs text-text-secondary mt-1">CJV curve response. Lightroom rendering may differ.</p>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-2 mb-2 mt-2">
         <div className="flex items-center gap-1 p-1 rounded-lg bg-surface-secondary shrink-0">
           <button

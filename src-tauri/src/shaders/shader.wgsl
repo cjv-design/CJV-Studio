@@ -100,6 +100,11 @@ struct GlobalAdjustments {
     color_calibration: ColorCalibrationSettings,
 
     hsl: array<HslColor, 8>,
+    xmp_parametric_curve: array<Point, 16>,
+    xmp_parametric_curve_count: u32,
+    _pad_xmp_curve1: u32,
+    _pad_xmp_curve2: u32,
+    _pad_xmp_curve3: u32,
     luma_curve: array<Point, 16>,
     red_curve: array<Point, 16>,
     green_curve: array<Point, 16>,
@@ -1934,6 +1939,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     base_srgb = apply_filmic_exposure(base_srgb, t_brightness);
+
+    if (adjustments.global.xmp_parametric_curve_count >= 2u) {
+        base_srgb = vec3<f32>(
+            apply_curve(base_srgb.r, adjustments.global.xmp_parametric_curve, adjustments.global.xmp_parametric_curve_count),
+            apply_curve(base_srgb.g, adjustments.global.xmp_parametric_curve, adjustments.global.xmp_parametric_curve_count),
+            apply_curve(base_srgb.b, adjustments.global.xmp_parametric_curve, adjustments.global.xmp_parametric_curve_count)
+        );
+    }
 
     var final_rgb = apply_all_curves(base_srgb,
         adjustments.global.luma_curve, adjustments.global.luma_curve_count,

@@ -11,6 +11,7 @@ use rawler::{
     rawimage::{RawImage, RawPhotometricInterpretation},
     rawsource::RawSource,
 };
+use sha2::{Digest, Sha256};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -57,6 +58,32 @@ fn is_linear_raw_format(raw_image: &RawImage) -> bool {
     matches!(
         raw_image.photometric,
         RawPhotometricInterpretation::LinearRaw
+    )
+}
+
+fn source_calibration(
+    bytes: &[u8],
+    raw: &RawImage,
+    decoder: &dyn Decoder,
+) -> Option<crate::camera_calibration::CameraCalibration> {
+    // The preparation tool currently validates reduced-resolution Sony ARWs.
+    // Never apply their baked-WB metadata to mosaic ARWs, DNGs or other cameras.
+    if !is_linear_raw_format(raw)
+        || raw.cpp != 3
+        || decoder.format_hint() != rawler::decoders::FormatHint::ARW
+    {
+        return None;
+    }
+    crate::camera_calibration::load(&format!("{:x}", Sha256::digest(bytes)), &raw.model)
+}
+
+fn calibrated_white_balance(
+    profile: &crate::camera_calibration::CameraCalibration,
+) -> Option<WhiteBalance> {
+    WhiteBalance::from_dual_illuminant_camera_neutral(
+        &profile.color_a,
+        &profile.color_d65,
+        &profile.neutral,
     )
 }
 
@@ -209,13 +236,28 @@ fn develop_internal(
     raw_image.wb_coeffs =
         crate::multi_exposure::neutralize_wb_if_multiexposure(raw_image.wb_coeffs, file_bytes);
 
+    let profile = if apply_calibration && !apply_ungamma {
+        source_calibration(file_bytes, &raw_image, decoder.as_ref())
+    } else {
+        None
+    };
+    let profile_matrix = profile.as_ref().and_then(|p| {
+        calibrated_white_balance(p).and_then(|wb| p.rendering_matrix(wb.temperature))
+    });
+    if profile_matrix.is_some() {
+        developer
+            .steps
+            .retain(|&step| step != ProcessingStep::Calibrate);
+    }
+    let baseline_gain = profile.as_ref().map_or(1.0, |p| p.baseline_exposure.exp2());
+
     check_cancel()?;
     let mut developed_intermediate = developer.develop_intermediate(&raw_image)?;
 
     drop(raw_image);
 
     let denominator = (original_white_level - original_black_level).max(1.0);
-    let rescale_factor = (u32::MAX as f32 - original_black_level) / denominator;
+    let rescale_factor = (u32::MAX as f32 - original_black_level) / denominator * baseline_gain;
 
     let safe_highlight_compression = 1000.0;
 
@@ -244,6 +286,9 @@ fn develop_internal(
         }
         Intermediate::ThreeColor(pixels) => {
             pixels.data.iter_mut().for_each(|p| {
+                if let Some(matrix) = profile_matrix {
+                    *p = crate::camera_calibration::transform(matrix, *p);
+                }
                 let mut r = (p[0] * rescale_factor).max(0.0);
                 let mut g = (p[1] * rescale_factor).max(0.0);
                 let mut b = (p[2] * rescale_factor).max(0.0);
@@ -308,6 +353,12 @@ pub fn read_as_shot_white_balance(file_bytes: &[u8]) -> Option<WhiteBalance> {
     if raw_image.cpp == 1 && !matches!(raw_image.photometric, RawPhotometricInterpretation::Cfa(_))
     {
         return None;
+    }
+
+    if let Some(profile) = source_calibration(file_bytes, &raw_image, decoder.as_ref())
+        && let Some(wb) = calibrated_white_balance(&profile)
+    {
+        return Some(wb);
     }
 
     // Reduced-resolution Sony ARWs already have WB baked into their pixels.

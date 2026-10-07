@@ -191,6 +191,7 @@ export interface Adjustments {
   curves: Curves;
   pointCurves?: Curves;
   parametricCurve?: ParametricCurve;
+  xmpParametricCurve?: Record<string, number> | null;
   curveMode?: 'point' | 'parametric';
   crop: Crop | null;
   dehaze: number;
@@ -516,6 +517,7 @@ export const INITIAL_MASK_CONTAINER: MaskContainer = {
 };
 
 export const INITIAL_ADJUSTMENTS: Adjustments = {
+  xmpParametricCurve: null,
   aiPatches: [],
   aspectRatio: null,
   blacks: 0,
@@ -793,7 +795,7 @@ export const ADJUSTMENT_GROUPS: Record<string, AdjustmentGroup[]> = {
     },
     {
       label: 'modals.copyPaste.groups.curves',
-      keys: ['curves', 'pointCurves', 'parametricCurve', 'curveMode'],
+      keys: ['curves', 'pointCurves', 'parametricCurve', 'curveMode', 'xmpParametricCurve'],
     },
   ],
   color: [
@@ -911,7 +913,7 @@ export const ADJUSTMENT_SECTIONS: Sections = {
     BasicAdjustment.Exposure,
     'toneMapper',
   ],
-  curves: ['curves', 'pointCurves', 'parametricCurve', 'curveMode'],
+  curves: ['curves', 'pointCurves', 'parametricCurve', 'curveMode', 'xmpParametricCurve'],
   color: [
     ColorAdjustment.Saturation,
     ColorAdjustment.Temperature,

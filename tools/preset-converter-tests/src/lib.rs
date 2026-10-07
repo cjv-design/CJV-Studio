@@ -17,3 +17,9 @@ pub mod preset_converter;
 
 #[path = "../../../src-tauri/src/sony_white_balance.rs"]
 pub mod sony_white_balance;
+
+#[path = "../../../src-tauri/src/camera_calibration.rs"]
+pub mod camera_calibration;
+
+#[path = "../../../src-tauri/src/imported_curve.rs"]
+pub mod imported_curve;

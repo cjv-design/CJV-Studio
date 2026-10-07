@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { mergePresetCalibration, scalePresetCalibration } from '../../../utils/presetCalibration';
 import { mixPresetWhiteBalance } from '../../../utils/presetWhiteBalance';
+import { mixImportedCurve } from '../../../utils/presetImportedCurve';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import {
   DndContext,
@@ -199,6 +200,11 @@ const mixAdjustments = (presetObj: any, intensity: number, initialObj: any = INI
     const key = keys[i];
     const presetVal = presetObj[key];
     const initialVal = initialObj[key] !== undefined ? initialObj[key] : (INITIAL_ADJUSTMENTS as any)[key];
+
+    if (key === 'xmpParametricCurve') {
+      result[key] = mixImportedCurve(presetVal, intensity);
+      continue;
+    }
 
     if (typeof presetVal === 'number') {
       result[key] = typeof initialVal === 'number' ? initialVal + (presetVal - initialVal) * fraction : presetVal;

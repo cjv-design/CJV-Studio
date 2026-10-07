@@ -32,6 +32,7 @@ mod app_state;
 mod apple_raw;
 mod cache_utils;
 mod camera_tethering;
+mod camera_calibration;
 mod culling;
 mod denoising;
 mod exif_processing;
@@ -45,6 +46,7 @@ mod hdr_deghosting;
 mod image_loader;
 mod image_processing;
 mod inpainting;
+mod imported_curve;
 mod launch_request;
 mod lens_blur;
 mod lens_correction;
@@ -1879,6 +1881,10 @@ pub fn run() {
             }
 
             let app_handle = app.handle().clone();
+
+            if let Ok(data_dir) = app_handle.path().app_data_dir() {
+                crate::camera_calibration::initialize(data_dir.join("camera-calibration"));
+            }
 
             if let Ok(cache_dir) = app_handle.path().app_cache_dir() {
                 crate::exif_processing::initialize_cache_dir(cache_dir);

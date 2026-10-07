@@ -1562,6 +1562,9 @@ pub struct GlobalAdjustments {
     pub color_calibration: ColorCalibrationSettings,
 
     pub hsl: [HslColor; 8],
+    pub xmp_parametric_curve: [Point; 16],
+    pub xmp_parametric_curve_count: u32,
+    _pad_xmp_curve: [u32; 3],
     pub luma_curve: [Point; 16],
     pub red_curve: [Point; 16],
     pub green_curve: [Point; 16],
@@ -2142,6 +2145,9 @@ fn get_global_adjustments_from_json(
 
     let default_curve = serde_json::json!([{"x": 0.0, "y": 0.0}, {"x": 255.0, "y": 255.0}]);
     let curves_obj = js_adjustments.get("curves").cloned().unwrap_or_default();
+    let xmp_points = if is_visible("curves") && js_adjustments["xmpParametricCurve"].is_object() {
+        crate::imported_curve::points(&js_adjustments["xmpParametricCurve"])
+    } else { Vec::new() };
 
     let luma_points: Vec<serde_json::Value> = if is_visible("curves") {
         curves_obj
@@ -2388,6 +2394,9 @@ fn get_global_adjustments_from_json(
             [HslColor::default(); 8]
         },
         luma_curve: convert_points_to_aligned(luma_points.clone()),
+        xmp_parametric_curve: convert_points_to_aligned(xmp_points.clone()),
+        xmp_parametric_curve_count: xmp_points.len() as u32,
+        _pad_xmp_curve: [0; 3],
         red_curve: convert_points_to_aligned(red_points.clone()),
         green_curve: convert_points_to_aligned(green_points.clone()),
         blue_curve: convert_points_to_aligned(blue_points.clone()),
