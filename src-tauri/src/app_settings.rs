@@ -99,6 +99,7 @@ pub fn all_available_adjustments() -> HashSet<String> {
         "curves",
         "pointCurves",
         "parametricCurve",
+        "xmpParametricCurve",
         "curveMode",
         "highlights",
         "shadows",
@@ -769,7 +770,9 @@ pub fn load_settings(app_handle: AppHandle) -> Result<AppSettings, String> {
 
         if !new_features.is_empty() {
             for feature in new_features {
-                if default_included.contains(&feature) {
+                if default_included.contains(&feature)
+                    && (feature != "xmpParametricCurve"
+                        || settings.copy_paste_settings.included_adjustments.contains("curves")) {
                     settings
                         .copy_paste_settings
                         .included_adjustments
