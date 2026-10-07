@@ -74,7 +74,7 @@ fn source_calibration(
     {
         return None;
     }
-    crate::camera_calibration::load(&format!("{:x}", Sha256::digest(bytes)), &raw.model)
+    crate::camera_calibration::load(&hex::encode(Sha256::digest(bytes)), &raw.model)
 }
 
 fn calibrated_white_balance(
