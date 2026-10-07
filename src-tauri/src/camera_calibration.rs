@@ -2,14 +2,43 @@
 //! are bundled. The source SHA-256 prevents one photograph's AnalogBalance or
 //! AsShotNeutral from being reused for a different capture.
 use serde_json::Value;
+use std::collections::{BTreeMap, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
 type Matrix = [[f64; 3]; 3];
-static DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+static RECORDS: OnceLock<BTreeMap<String, String>> = OnceLock::new();
 
 pub fn initialize(directory: PathBuf) {
-    let _ = DIRECTORY.set(directory);
+    let mut records = BTreeMap::new();
+    if let Ok(entries) = std::fs::read_dir(directory) {
+        for entry in entries.flatten().take(4096) {
+            let path = entry.path();
+            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if path.extension().and_then(|s| s.to_str()) == Some("json")
+                && name.len() == 64
+                && name.bytes().all(|b| b.is_ascii_hexdigit())
+                && entry
+                    .metadata()
+                    .is_ok_and(|m| m.is_file() && m.len() <= 32_768)
+                && let Ok(content) = std::fs::read_to_string(&path)
+            {
+                records.insert(name.to_string(), content);
+            }
+        }
+    }
+    // One immutable snapshot keeps WB, rendering and thumbnails consistent.
+    let _ = RECORDS.set(records);
+}
+
+pub fn revision() -> u64 {
+    let mut hash = DefaultHasher::new();
+    "cjv-colour-0.1.2".hash(&mut hash);
+    if let Some(records) = RECORDS.get() {
+        records.hash(&mut hash);
+    }
+    hash.finish()
 }
 
 #[derive(Clone, Debug)]
@@ -170,11 +199,7 @@ pub fn load(hash: &str, model: &str) -> Option<CameraCalibration> {
     if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
-    let path = DIRECTORY.get()?.join(format!("{hash}.json"));
-    if std::fs::metadata(&path).ok()?.len() > 32_768 {
-        return None;
-    }
-    let json = std::fs::read_to_string(path).ok()?;
+    let json = RECORDS.get()?.get(hash)?;
     CameraCalibration::parse(&serde_json::from_str(&json).ok()?, hash, model)
 }
 

@@ -78,6 +78,7 @@ fn compute_thumbnail_cache_hash(path_str: &str, adjustments_bytes: &[u8]) -> Opt
     hasher.update(path_str.as_bytes());
     hasher.update(&img_mod_time.to_le_bytes());
     hasher.update(adjustments_bytes);
+    hasher.update(&crate::camera_calibration::revision().to_le_bytes());
     Some(hasher.finalize().to_hex().to_string())
 }
 

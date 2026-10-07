@@ -353,6 +353,8 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
         }
     }
     if !curves_map.is_empty() {
+        adjustments.insert("pointCurves".to_string(), Value::Object(curves_map.clone()));
+        adjustments.insert("curveMode".to_string(), json!("point"));
         adjustments.insert("curves".to_string(), Value::Object(curves_map));
     }
 
