@@ -1,0 +1,60 @@
+name: CJV portable test copy
+
+on:
+  push:
+    branches: [cjv/calibration-import]
+    paths: [.github/workflows/cjv-portable.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  portable:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Verify the source build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN" }
+          $uri = 'https://api.github.com/repos/cjv-design/CJV-Studio/actions/runs/37689627004'
+          for ($attempt = 0; $attempt -lt 20; $attempt++) {
+            $run = Invoke-RestMethod -Uri $uri -Headers $headers
+            if ($run.head_sha -ne '50f8980e5f6d191216c9db87f90809c8ff72d9e9') { throw 'Unexpected source revision' }
+            if ($run.status -eq 'completed') { break }
+            Start-Sleep -Seconds 30
+          }
+          if ($run.conclusion -ne 'success') { throw 'Source build has not succeeded' }
+      - uses: actions/download-artifact@v4
+        with:
+          name: CJV-Studio-Alpha-0.1.1-Windows
+          run-id: 37689627004
+          github-token: ${{ github.token }}
+          path: downloaded
+      - name: Extract the built application without running its installer
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem downloaded -Recurse -Filter '*.exe')
+          if ($installer.Count -ne 1) { throw 'Expected one installer' }
+          $expected = [regex]::Match((Get-Content downloaded/installer-sha256.txt -Raw), '(?im)^Hash\s*:\s*([A-F0-9]{64})').Groups[1].Value
+          $actual = (Get-FileHash -LiteralPath $installer[0].FullName -Algorithm SHA256).Hash
+          if (!$expected -or $expected -ne $actual) { throw 'Installer checksum mismatch' }
+          & 'C:\Program Files\7-Zip\7z.exe' x $installer[0].FullName '-oextracted' -y
+          if ($LASTEXITCODE -ne 0) { throw 'Extraction failed' }
+          New-Item -ItemType Directory portable | Out-Null
+          Copy-Item -LiteralPath extracted/RapidRAW.exe -Destination portable/RapidRAW.exe
+          Copy-Item -LiteralPath extracted/resources -Destination portable/resources -Recurse
+          if (!(Test-Path portable/resources/onnxruntime.dll)) { throw 'Runtime resource missing' }
+          @{ sourceCommit = '50f8980e5f6d191216c9db87f90809c8ff72d9e9'; sourceRun = 37689627004; installerSha256 = $actual } |
+            ConvertTo-Json | Set-Content portable/source-build.json
+          Get-ChildItem portable -File -Recurse | Get-FileHash -Algorithm SHA256 |
+            Select-Object Hash,Path | ConvertTo-Json | Set-Content portable/checksums.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CJV-Studio-Alpha-0.1.1-Portable
+          path: portable
+          if-no-files-found: error
+          retention-days: 14
