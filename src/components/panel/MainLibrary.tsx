@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { getVersion } from '@tauri-apps/api/app';
+import { getName, getVersion } from '@tauri-apps/api/app';
 import { open } from '@tauri-apps/plugin-shell';
 import {
   AlertTriangle,
@@ -300,6 +300,9 @@ export default function MainLibrary(props: MainLibraryProps) {
       try {
         const currentVersion = await getVersion();
         setAppVersion(currentVersion);
+
+        // The CJV alpha has its own version and must not offer an upstream update.
+        if ((await getName()) === 'CJV Studio Alpha') return;
 
         const response = await fetch('https://api.github.com/repos/CyberTimon/RapidRAW/releases/latest');
         if (!response.ok) {

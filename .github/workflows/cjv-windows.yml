@@ -77,6 +77,8 @@ jobs:
         run: rustfmt --edition 2024 --check src-tauri/src/preset_converter.rs
       - name: Build the frontend for native tests
         run: npm run build
+      - name: Test partial Calibration preset application
+        run: node --experimental-strip-types --test tests/preset-calibration.test.mjs
       - name: Test the production XMP converter
         working-directory: src-tauri
         run: cargo test --locked --release --lib preset_converter::tests

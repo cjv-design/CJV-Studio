@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { mergePresetCalibration, scalePresetCalibration } from '../../../utils/presetCalibration';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import {
   DndContext,
@@ -902,6 +903,10 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
     setAdjustments((prevAdjustments: Adjustments) => ({
       ...prevAdjustments,
       ...preset.adjustments,
+      colorCalibration: mergePresetCalibration(
+        prevAdjustments.colorCalibration || INITIAL_ADJUSTMENTS.colorCalibration,
+        preset.adjustments.colorCalibration,
+      ),
     }));
   };
 
@@ -912,6 +917,10 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         ...mixed,
+        colorCalibration: mergePresetCalibration(
+          prev.colorCalibration || INITIAL_ADJUSTMENTS.colorCalibration,
+          scalePresetCalibration(preset.adjustments.colorCalibration, intensity),
+        ),
       }));
     },
     [setAdjustments],
