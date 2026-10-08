@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { homeDir } from '@tauri-apps/api/path';
@@ -35,7 +35,9 @@ const loadExifForImages = async (
   expectedFolderPath: string | null,
   sortKey: string,
   setLibrary: (updater: any) => void,
+  isCurrent: () => boolean,
 ) => {
+  if (!isCurrent()) return;
   const exifSortKeys = ['date_taken', 'iso', 'shutter_speed', 'aperture', 'focal_length'];
   const isExifSortActive = exifSortKeys.includes(sortKey);
 
@@ -51,15 +53,18 @@ const loadExifForImages = async (
     const chunkSize = 100;
 
     for (let i = 0; i < paths.length; i += chunkSize) {
+      if (!isCurrent()) return;
       const chunk = paths.slice(i, i + chunkSize);
       try {
         const chunkExif: any = await invoke(Invokes.ReadExifForPaths, { paths: chunk });
+        if (!isCurrent()) return;
         combinedExifMap = { ...combinedExifMap, ...chunkExif };
       } catch (err) {
         console.error('Failed to read EXIF chunk:', err);
       }
     }
 
+    if (!isCurrent()) return;
     const finalImageList = files.map((image) => ({
       ...image,
       exif: combinedExifMap[image.path] || image.exif || null,
@@ -72,11 +77,12 @@ const loadExifForImages = async (
       const fetchExifInChunks = async () => {
         const chunkSize = 50;
         for (let i = 0; i < paths.length; i += chunkSize) {
-          if (useLibraryStore.getState().currentFolderPath !== expectedFolderPath) break;
+          if (!isCurrent() || useLibraryStore.getState().currentFolderPath !== expectedFolderPath) break;
 
           const chunk = paths.slice(i, i + chunkSize);
           try {
             const chunkExif: any = await invoke(Invokes.ReadExifForPaths, { paths: chunk });
+            if (!isCurrent()) return;
             setLibrary((state: any) => ({
               imageList: state.imageList.map((image: ImageFile) => ({
                 ...image,
@@ -95,6 +101,9 @@ const loadExifForImages = async (
 };
 
 export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationProps) {
+  const imageRequest = useRef(0);
+  const activeImageLoad = useRef(0);
+  const libraryRequest = useRef(0);
   const {
     transformWrapperRef,
     preloadedDataRef,
@@ -108,6 +117,9 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
   } = refs;
 
   const handleGoHome = useCallback(() => {
+    imageRequest.current++;
+    activeImageLoad.current++;
+    libraryRequest.current++;
     useLibraryStore.getState().setLibrary({
       rootPaths: [],
       currentFolderPath: null,
@@ -123,6 +135,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
   }, []);
 
   const handleBackToLibrary = useCallback(() => {
+    imageRequest.current++;
     const { selectedImage } = useEditorStore.getState();
     const { setLibrary } = useLibraryStore.getState();
     const { setUI } = useUIStore.getState();
@@ -159,7 +172,9 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
   const handleImageSelect = useCallback(
     async (path: string, openInEditor: boolean = true) => {
-      const { selectedImage, isSliderDragging, resetHistory, setEditor } = useEditorStore.getState();
+      const request = ++imageRequest.current;
+      const isCurrent = () => imageRequest.current === request;
+      const { selectedImage, resetHistory, setEditor } = useEditorStore.getState();
       const { setLibrary, multiSelectedPaths } = useLibraryStore.getState();
       const { setUI } = useUIStore.getState();
 
@@ -185,6 +200,10 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       const isCachedInBackend = isFrontendCached
         ? await invoke<boolean>('is_image_cached', { path }).catch(() => false)
         : false;
+      if (!isCurrent()) return;
+
+      const loadRequest = ++activeImageLoad.current;
+      const isActiveLoad = () => activeImageLoad.current === loadRequest && selectedImagePathRef.current === path;
 
       const hasDifferentResolution =
         cached &&
@@ -220,7 +239,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
         compactEditorPanelHeightOverride: null,
       });
 
-      if (isFrontendCached) {
+      if (cached && isFrontendCached) {
         setEditor({
           selectedImage: {
             ...cached.selectedImage,
@@ -246,13 +265,13 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
         invoke(Invokes.LoadImage, { path })
           .then((_result: any) => {
-            if (selectedImagePathRef.current !== path) return;
+            if (!isActiveLoad()) return;
             isBackendReadyRef.current = true;
             currentResRef.current = 0;
             setEditor({ originalSize: { width: _result.width, height: _result.height } });
           })
           .catch((err: any) => {
-            if (String(err).includes('cancelled')) return;
+            if (!isActiveLoad() || String(err).includes('cancelled')) return;
             console.error('Background load_image failed on cache hit:', err);
             isBackendReadyRef.current = true;
             currentResRef.current = 0;
@@ -260,7 +279,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
         invoke(Invokes.LoadMetadata, { path })
           .then((metadata: any) => {
-            if (selectedImagePathRef.current !== path) return;
+            if (!isActiveLoad()) return;
             let freshAdjustments: any;
             if (metadata.adjustments && !metadata.adjustments.is_null) {
               freshAdjustments = normalizeLoadedAdjustments(metadata.adjustments);
@@ -270,7 +289,13 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
             if (freshAdjustments.aspectRatio == null && cached.adjustments.aspectRatio != null) {
               freshAdjustments.aspectRatio = cached.adjustments.aspectRatio;
             }
-            if (!isSliderDragging && JSON.stringify(cached.adjustments) !== JSON.stringify(freshAdjustments)) {
+            const current = useEditorStore.getState();
+            // Metadata may finish after an edit or undo. Never replace that newer state.
+            if (
+              !current.isSliderDragging &&
+              current.adjustments === cached.adjustments &&
+              JSON.stringify(cached.adjustments) !== JSON.stringify(freshAdjustments)
+            ) {
               setEditor({ adjustments: freshAdjustments });
               resetHistory(freshAdjustments);
               prevAdjustmentsRef.current = { path, adjustments: freshAdjustments };
@@ -335,6 +360,12 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       preserveEditor = false,
       skipHistory = false,
     ) => {
+      const request = ++libraryRequest.current;
+      const isCurrent = () => libraryRequest.current === request;
+      if (!preserveEditor) {
+        imageRequest.current++;
+        activeImageLoad.current++;
+      }
       const { appSettings, handleSettingsChange } = useSettingsStore.getState();
       const { pinnedFolders } = appSettings || { pinnedFolders: [] };
       const { setLibrary, sortCriteria } = useLibraryStore.getState();
@@ -349,6 +380,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
       if (!preserveEditor) {
         await invoke('cancel_thumbnail_generation');
+        if (!isCurrent()) return;
         clearThumbnailQueue();
         setLibrary({ isViewLoading: true, activeAlbumId: null, libraryScrollTop: 0 });
         setProcess({ thumbnails: {} });
@@ -412,6 +444,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
         } else {
           files = await invoke(command, { path });
         }
+        if (!isCurrent()) return;
 
         const initialRatings: Record<string, number> = {};
         files.forEach((f) => {
@@ -421,7 +454,8 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
         });
         setLibrary({ imageRatings: initialRatings });
 
-        await loadExifForImages(files, path, sortCriteria.key, setLibrary);
+        await loadExifForImages(files, path, sortCriteria.key, setLibrary, isCurrent);
+        if (!isCurrent()) return;
 
         if (!preserveEditor) {
           invoke(Invokes.StartBackgroundIndexing, { folderPath: path }).catch((err) => {
@@ -429,10 +463,11 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
           });
         }
       } catch (err) {
+        if (!isCurrent()) return;
         console.error('Failed to load folder contents:', err);
         toast.error('Failed to load images from the selected folder.');
       } finally {
-        useLibraryStore.getState().setLibrary({ isViewLoading: false });
+        if (isCurrent()) useLibraryStore.getState().setLibrary({ isViewLoading: false });
       }
     },
     [clearThumbnailQueue, refs],
@@ -440,6 +475,12 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
   const handleSelectAlbum = useCallback(
     async (albumId: string, albumName: string, imagePaths: string[], preserveEditor = false, skipHistory = false) => {
+      const request = ++libraryRequest.current;
+      const isCurrent = () => libraryRequest.current === request;
+      if (!preserveEditor) {
+        imageRequest.current++;
+        activeImageLoad.current++;
+      }
       const { setLibrary, sortCriteria } = useLibraryStore.getState();
       const { setUI } = useUIStore.getState();
 
@@ -449,6 +490,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
       if (!preserveEditor) {
         await invoke('cancel_thumbnail_generation');
+        if (!isCurrent()) return;
         clearThumbnailQueue();
         setLibrary({ libraryScrollTop: 0 });
         globalImageCache.clear();
@@ -465,6 +507,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
       try {
         const files: ImageFile[] = await invoke(Invokes.GetAlbumImages, { paths: imagePaths });
+        if (!isCurrent()) return;
 
         const initialRatings: Record<string, number> = {};
         files.forEach((f) => {
@@ -476,12 +519,13 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
           ...(preserveEditor ? {} : { multiSelectedPaths: [], libraryActivePath: null }),
         });
 
-        await loadExifForImages(files, albumFolderPath, sortCriteria.key, setLibrary);
+        await loadExifForImages(files, albumFolderPath, sortCriteria.key, setLibrary, isCurrent);
       } catch (err) {
+        if (!isCurrent()) return;
         console.error('Failed to load album images:', err);
         toast.error(`Failed to load album: ${err}`);
       } finally {
-        setLibrary({ isViewLoading: false });
+        if (isCurrent()) setLibrary({ isViewLoading: false });
       }
     },
     [clearThumbnailQueue],

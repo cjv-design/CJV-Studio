@@ -1258,7 +1258,7 @@ export default function CullingView(props: any) {
             listRef={setListHandle}
             rowCount={imageList.length}
             rowHeight={sidebarWidth - 16}
-            rowComponent={Row}
+            rowComponent={VirtualRow}
             rowProps={rowProps}
             className="custom-scrollbar"
           />
@@ -1266,4 +1266,9 @@ export default function CullingView(props: any) {
       </div>
     </div>
   );
+}
+
+// react-window requires a component with a ReactElement return type.
+function VirtualRow(props: React.ComponentProps<typeof Row>) {
+  return <Row {...props} />;
 }

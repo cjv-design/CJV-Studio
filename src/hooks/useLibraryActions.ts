@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import type { FolderTree } from '../components/panel/right/FolderTree';
 import { toast } from 'react-toastify';
 import { useLibraryStore } from '../store/useLibraryStore';
 import { useEditorStore } from '../store/useEditorStore';
@@ -376,7 +377,7 @@ export function useLibraryActions(handleImageSelect?: (path: string, openInEdito
       const updates: any = {};
 
       if (rootPaths && rootPaths.length > 0) {
-        const treesData = await invoke(Invokes.GetPinnedFolderTrees, {
+        const treesData = await invoke<FolderTree[]>(Invokes.GetPinnedFolderTrees, {
           paths: rootPaths,
           expandedFolders: expandedArray,
           showImageCounts,
@@ -387,7 +388,7 @@ export function useLibraryActions(handleImageSelect?: (path: string, openInEdito
       }
 
       if (pinnedFolders && pinnedFolders.length > 0) {
-        const pinnedTreesData = await invoke(Invokes.GetPinnedFolderTrees, {
+        const pinnedTreesData = await invoke<FolderTree[]>(Invokes.GetPinnedFolderTrees, {
           paths: pinnedFolders,
           expandedFolders: expandedArray,
           showImageCounts,
@@ -419,7 +420,7 @@ export function useLibraryActions(handleImageSelect?: (path: string, openInEdito
     handleSettingsChange({ ...appSettings, pinnedFolders: newPins });
 
     try {
-      const trees = await invoke(Invokes.GetPinnedFolderTrees, {
+      const trees = await invoke<FolderTree[]>(Invokes.GetPinnedFolderTrees, {
         paths: newPins,
         expandedFolders: Array.from(expandedFolders),
         showImageCounts: appSettings.enableFolderImageCounts ?? false,

@@ -699,11 +699,16 @@ export default function LibraryGrid(props: any) {
             rowHeight={getItemSize}
             onScroll={(e: React.UIEvent<HTMLElement>) => handleScroll(e.currentTarget.scrollTop)}
             className="custom-scrollbar"
-            rowComponent={Row}
+            rowComponent={VirtualRow}
             rowProps={memoizedRowProps}
           />
         </div>
       </div>
     </div>
   );
+}
+
+// react-window requires a component with a ReactElement return type.
+function VirtualRow(props: React.ComponentProps<typeof Row>) {
+  return <Row {...props} />;
 }

@@ -51,6 +51,7 @@ import {
   SubMaskMode,
   ToolType,
   MASK_ICON_MAP,
+  getMaskIcon,
   AI_DIRECT_PATCH_TYPES,
   AI_TOUCH_UP_TYPES,
   AI_GENERATIVE_CREATION_TYPES,
@@ -1586,7 +1587,7 @@ function ContainerRow({
               >
                 {isStandalone ? (
                   (() => {
-                    const StandaloneIcon = MASK_ICON_MAP[firstSubMask.type] || Circle;
+                    const StandaloneIcon = getMaskIcon(firstSubMask.type);
                     return <StandaloneIcon size={18} />;
                   })()
                 ) : isExpanded ? (
@@ -1758,7 +1759,7 @@ function SubMaskRow({
     setNodeRef(node);
     setDroppableRef(node);
   };
-  const MaskIcon = MASK_ICON_MAP[subMask.type] || Circle;
+  const MaskIcon = getMaskIcon(subMask.type);
   const { showContextMenu } = useContextMenu();
   const [isHovered, setIsHovered] = useState(false);
   const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);

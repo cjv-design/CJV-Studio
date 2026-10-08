@@ -18,6 +18,7 @@ import {
   INITIAL_ADJUSTMENTS,
   ADJUSTMENT_SECTIONS,
   getVisibleAdjustmentSections,
+  type AdjustmentSectionName,
 } from '../../../utils/adjustments';
 import { useContextMenu } from '../../../context/ContextMenuContext';
 import { OPTION_SEPARATOR, Orientation } from '../../ui/AppProperties';
@@ -143,7 +144,7 @@ export default function Controls() {
     });
   };
 
-  const handleSectionContextMenu = (event: any, sectionName: string) => {
+  const handleSectionContextMenu = (event: any, sectionName: AdjustmentSectionName) => {
     event.preventDefault();
     event.stopPropagation();
 
@@ -288,7 +289,7 @@ export default function Controls() {
 
       <div className="grow overflow-y-scroll p-3 flex flex-col gap-2">
         {selectedImage ? (
-          visibleSections.map((sectionName: string) => {
+          visibleSections.map((sectionName) => {
             const SectionComponent: any = {
               basic: BasicAdjustments,
               curves: CurveGraph,

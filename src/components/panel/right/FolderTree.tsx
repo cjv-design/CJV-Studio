@@ -88,7 +88,7 @@ interface VisibleProps {
   total: number;
 }
 
-const ALBUM_ICONS: Record<string, React.ElementType> = {
+const ALBUM_ICONS: Record<string, typeof Folder> = {
   plane: Plane,
   mountain: Mountain,
   sun: Sun,
@@ -804,7 +804,7 @@ export default function FolderTree({
   const filteredAlbumTree = useMemo(() => {
     let base = albumTree;
     if (isSearching) {
-      base = base.map((item: any) => filterAlbumTree(item, trimmedQuery)).filter((t: any) => t !== null);
+      base = base.map((item) => filterAlbumTree(item, trimmedQuery)).filter((item): item is AlbumItem => item !== null);
     }
     return base;
   }, [albumTree, trimmedQuery, isSearching]);

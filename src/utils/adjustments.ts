@@ -1,5 +1,6 @@
 import { Crop } from 'react-image-crop';
 import { v4 as uuidv4 } from 'uuid';
+import type { ParseKeys } from 'i18next';
 import { SubMask, SubMaskMode } from '../components/panel/right/Masks';
 import type { AdjustmentLayout, AppSettings } from '../components/ui/AppProperties';
 import type { WhiteBalance } from './whiteBalance';
@@ -401,13 +402,13 @@ export interface SectionVisibility {
   effects: boolean;
 }
 
-export const COLOR_LABELS: Array<Color> = [
+export const COLOR_LABELS = [
   { name: 'red', color: '#ef4444' },
   { name: 'yellow', color: '#facc15' },
   { name: 'green', color: '#4ade80' },
   { name: 'blue', color: '#60a5fa' },
   { name: 'purple', color: '#a78bfa' },
-];
+] as const satisfies ReadonlyArray<Color>;
 
 const INITIAL_COLOR_GRADING: ColorGradingProps = {
   balance: 0,
@@ -781,7 +782,7 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
 };
 
 export interface AdjustmentGroup {
-  label: string;
+  label: ParseKeys;
   keys: string[];
 }
 
@@ -980,10 +981,13 @@ const reconcileOrder = (defaultOrder: string[], order: string[] = []): string[] 
   return [...savedOrder, ...defaultOrder.filter((id) => !savedOrder.includes(id))];
 };
 
-export const getAdjustmentSectionOrder = (order?: string[]): string[] =>
-  reconcileOrder(Object.keys(ADJUSTMENT_SECTIONS), order);
+export type AdjustmentSectionName = 'basic' | 'curves' | 'color' | 'details' | 'effects';
+export const getAdjustmentSectionOrder = (order?: string[]): AdjustmentSectionName[] =>
+  reconcileOrder(Object.keys(ADJUSTMENT_SECTIONS), order).filter((name): name is AdjustmentSectionName =>
+    Object.hasOwn(ADJUSTMENT_SECTIONS, name),
+  );
 
-export const getVisibleAdjustmentSections = (layout?: AdjustmentLayout): string[] =>
+export const getVisibleAdjustmentSections = (layout?: AdjustmentLayout): AdjustmentSectionName[] =>
   getAdjustmentSectionOrder(layout?.sectionOrder).filter((section) => !layout?.hiddenSections?.includes(section));
 
 export const DEFAULT_HIDDEN_ADJUSTMENT_TOOLS = ['chromaticAberration'];

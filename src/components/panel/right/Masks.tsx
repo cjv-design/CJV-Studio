@@ -20,7 +20,7 @@ import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import Text from '../../ui/Text';
 import { TextWeights } from '../../../types/typography';
-import i18n from 'i18next';
+import i18n, { type ParseKeys } from 'i18next';
 
 export enum Mask {
   AiDepth = 'ai-depth',
@@ -106,7 +106,7 @@ export function getSubMaskName(subMask: Pick<SubMask, 'name' | 'type'>) {
   return subMask.name?.trim() || formatMaskTypeName(subMask.type);
 }
 
-export const MASK_ICON_MAP: Record<Mask, any> = {
+export const MASK_ICON_MAP: Record<Mask, typeof Circle> = {
   [Mask.AiDepth]: BringToFront,
   [Mask.AiForeground]: User,
   [Mask.AiSky]: Cloud,
@@ -124,6 +124,8 @@ export const MASK_ICON_MAP: Record<Mask, any> = {
   [Mask.Liquify]: Spline,
   [Mask.Retouch]: MopSparkles,
 };
+
+export const getMaskIcon = (type: Mask) => MASK_ICON_MAP[type] || Circle;
 
 export const MASK_AI_TYPES: Array<MaskType> = [
   { disabled: false, icon: SquareMousePointer, name: 'Subject', type: Mask.AiSubject },
@@ -261,7 +263,7 @@ export const AI_SUB_MASK_COMPONENT_TYPES: Array<MaskType> = [
   ...AI_GENERATIVE_CREATION_TYPES,
 ];
 
-export function NewMaskDropZone({ isOver, textKey }: { isOver: boolean; textKey: string }) {
+export function NewMaskDropZone({ isOver, textKey }: { isOver: boolean; textKey: ParseKeys }) {
   const { t } = useTranslation();
   return (
     <motion.div

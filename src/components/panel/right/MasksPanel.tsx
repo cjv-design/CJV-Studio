@@ -66,6 +66,7 @@ import {
   MASK_AI_TYPES,
   ALL_MASK_TYPES,
   MASK_ICON_MAP,
+  getMaskIcon,
   SubMaskMode,
   ToolType,
   formatMaskTypeName,
@@ -80,6 +81,7 @@ import {
   MaskContainer,
   ADJUSTMENT_SECTIONS,
   getVisibleAdjustmentSections,
+  type AdjustmentSectionName,
 } from '../../../utils/adjustments';
 import { useContextMenu } from '../../../context/ContextMenuContext';
 import { OPTION_SEPARATOR, Orientation, Panel } from '../../ui/AppProperties';
@@ -102,7 +104,19 @@ interface DragData {
   parentId?: string;
 }
 
-const SUB_MASK_CONFIG: Record<Mask, any> = {
+interface SubMaskConfig {
+  showBrushTools?: boolean;
+  showFlowControl?: boolean;
+  parameters?: Array<{
+    key: 'feather' | 'tolerance' | 'grow';
+    min: number;
+    max: number;
+    step: number;
+    defaultValue: number;
+    multiplier?: number;
+  }>;
+}
+const SUB_MASK_CONFIG: Partial<Record<Mask, SubMaskConfig>> = {
   [Mask.Radial]: {
     parameters: [{ key: 'feather', min: 0, max: 100, step: 1, multiplier: 100, defaultValue: 50 }],
   },
@@ -817,11 +831,11 @@ export default function MasksPanel() {
       const creationFn = () => {
         if (overData?.type === 'Container') {
           handleAddSubMask(overData.item!.id, dragData.maskType!);
-        } else if (overData?.type === 'SubMask') {
+        } else if (over && overData?.type === 'SubMask') {
           const container = adjustments.masks.find((m) => m.id === overData.parentId);
           if (container) {
             const targetIndex = container.subMasks.findIndex((sm) => sm.id === over.id);
-            handleAddSubMask(overData.parentId!, dragData.maskType!, targetIndex);
+            handleAddSubMask(overData.parentId!, dragData.maskType!, SubMaskMode.Additive, targetIndex);
           }
         } else {
           handleAddMaskContainer(dragData.maskType!);
@@ -1687,7 +1701,7 @@ function SubMaskRow({
     setNodeRef(node);
     setDroppableRef(node);
   };
-  const MaskIcon = MASK_ICON_MAP[subMask.type] || Circle;
+  const MaskIcon = getMaskIcon(subMask.type);
   const { showContextMenu } = useContextMenu();
   const [isHovered, setIsHovered] = useState(false);
   const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2001,7 +2015,8 @@ function SettingsPanel({
     updateSubMask(activeSubMask.id, { parameters: newParams });
   };
 
-  const subMaskConfig = activeSubMask ? SUB_MASK_CONFIG[activeSubMask.type] || {} : {};
+  const configForMask = (type: Mask): SubMaskConfig => SUB_MASK_CONFIG[type] || {};
+  const subMaskConfig = activeSubMask ? configForMask(activeSubMask.type) : {};
   const isAiMask =
     activeSubMask && [Mask.AiSubject, Mask.AiForeground, Mask.AiSky, Mask.AiDepth].includes(activeSubMask.type);
   const isComponentMode = !!activeSubMask;
@@ -2038,7 +2053,7 @@ function SettingsPanel({
     });
   };
 
-  const handleSectionContextMenu = (event: any, sectionName: string) => {
+  const handleSectionContextMenu = (event: any, sectionName: AdjustmentSectionName) => {
     if (!isActive) return;
     event.preventDefault();
     event.stopPropagation();
@@ -2221,13 +2236,13 @@ function SettingsPanel({
                 />
               )}
 
-              {subMaskConfig.parameters?.map((param: any) => (
+              {subMaskConfig.parameters?.map((param) => (
                 <Slider
                   key={param.key}
                   label={
                     param.key === 'feather' && activeSubMask.type === Mask.AiDepth
                       ? t('editor.masks.params.globalFeather')
-                      : t('editor.masks.params.' + param.key)
+                      : t(`editor.masks.params.${param.key}`)
                   }
                   min={param.min}
                   max={param.max}
