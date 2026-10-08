@@ -62,7 +62,7 @@ fn response(control: usize, strength: f64, x: f64) -> f64 {
 }
 
 // Match the monotone Hermite interpolator used by the GPU when selecting knots.
-fn interpolate(x: f64, points: &[(f64, f64)]) -> f64 {
+pub(crate) fn interpolate(x: f64, points: &[(f64, f64)]) -> f64 {
     let i = (0..points.len() - 1)
         .find(|&i| x <= points[i + 1].0)
         .unwrap_or(points.len() - 2);

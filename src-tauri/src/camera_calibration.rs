@@ -34,7 +34,7 @@ pub fn initialize(directory: PathBuf) {
 
 pub fn revision() -> u64 {
     let mut hash = DefaultHasher::new();
-    "cjv-colour-0.1.3".hash(&mut hash);
+    "cjv-colour-0.1.6".hash(&mut hash);
     if let Some(records) = RECORDS.get() {
         records.hash(&mut hash);
     }

@@ -269,6 +269,7 @@ export interface Adjustments {
   temperature: number;
   tint: number;
   toneMapper: 'agx' | 'basic' | 'reference';
+  referenceRenderingVersion?: 1 | 2;
   transformDistortion: number;
   transformVertical: number;
   transformHorizontal: number;

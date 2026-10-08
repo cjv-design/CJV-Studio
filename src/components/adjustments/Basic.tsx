@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import clsx from 'clsx';
 import Slider from '../ui/Slider';
+import Switch from '../ui/Switch';
 import { Adjustments, BasicAdjustment } from '../../utils/adjustments';
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -179,6 +180,7 @@ export default function BasicAdjustments({
     setAdjustments((prev: Partial<Adjustments>) => ({
       ...prev,
       toneMapper: mapper as 'basic' | 'agx' | 'reference',
+      ...(mapper === 'reference' ? { referenceRenderingVersion: 2 as const } : {}),
     }));
   };
 
@@ -203,6 +205,17 @@ export default function BasicAdjustments({
           exposureValue={adjustments.exposure}
           onExposureChange={(value) => handleAdjustmentChange(BasicAdjustment.Exposure, value)}
           onDragStateChange={onDragStateChange}
+        />
+      )}
+      {!isForMask && adjustments.toneMapper === 'reference' && (
+        <Switch
+          className="mb-3 px-3"
+          label={t('adjustments.basic.updatedReference', { defaultValue: 'Updated Reference rendering' })}
+          tooltip={t('adjustments.basic.updatedReferenceHelp', { defaultValue: 'Use improved highlights, shadows, curves and colour grading. Switch off to retain the earlier rendering.' })}
+          checked={adjustments.referenceRenderingVersion === 2}
+          onChange={(enabled) => setAdjustments((prev: Partial<Adjustments>) => ({
+            ...prev, referenceRenderingVersion: enabled ? 2 : 1,
+          }))}
         />
       )}
       <Slider

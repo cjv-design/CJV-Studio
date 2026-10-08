@@ -371,6 +371,7 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
     let mut import_notes = Vec::new();
     if attrs.contains_key("ProcessVersion") {
         adjustments.insert("toneMapper".into(), json!("reference"));
+        adjustments.insert("referenceRenderingVersion".into(), json!(2));
         import_notes.push("Reference tone rendering approximates Adobe's RAW tone response. Camera colour profiles and local adjustments may still differ.");
     }
     if xmp_content.contains("<crs:Look") || attrs.contains_key("RGBTable") {
@@ -442,6 +443,7 @@ mod tests {
                 serde_json::json!(value as f64)
             );
             assert_eq!(result.adjustments["toneMapper"], "reference");
+            assert_eq!(result.adjustments["referenceRenderingVersion"], 2);
         }
     }
     use super::*;

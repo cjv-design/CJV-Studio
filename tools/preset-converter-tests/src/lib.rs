@@ -30,5 +30,14 @@ pub mod enhanced_profile;
 #[path = "../../../src-tauri/src/reference_basic.rs"]
 pub mod reference_basic;
 
+#[path = "../../../src-tauri/src/reference_tone.rs"]
+pub mod reference_tone;
+
+#[path = "../../../src-tauri/src/reference_grading.rs"]
+pub mod reference_grading;
+
 #[path = "../../../src-tauri/src/load_generation.rs"]
 pub mod load_generation;
+
+#[path = "../../../src-tauri/src/reference_calibration.rs"]
+pub mod reference_calibration;

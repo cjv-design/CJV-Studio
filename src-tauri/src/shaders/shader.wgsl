@@ -98,11 +98,22 @@ struct GlobalAdjustments {
     _pad3: f32,
 
     color_calibration: ColorCalibrationSettings,
+    reference_calibration_matrix: mat3x3<f32>,
 
     hsl: array<HslColor, 8>,
+    reference_grading_curve: array<Point, 16>,
+    reference_grading_curve_count: u32,
+    reference_grading_stage: u32,
+    reference_point_curve_version: u32,
+    reference_calibration_stage: u32,
+    reference_white_curve: array<Point, 16>,
+    reference_white_curve_count: u32,
+    _pad_reference_white1: u32,
+    _pad_reference_white2: u32,
+    _pad_reference_white3: u32,
     reference_basic_curve: array<Point, 16>,
     reference_basic_curve_count: u32,
-    _pad_reference_curve1: u32,
+    reference_tone_version: u32,
     _pad_reference_curve2: u32,
     _pad_reference_curve3: u32,
     xmp_parametric_curve: array<Point, 16>,
@@ -226,6 +237,7 @@ const HSL_RANGES: array<HslRange, 8> = array<HslRange, 8>(
 @group(0) @binding(12) var gf_coeffs_texture: texture_2d<f32>;
 @group(0) @binding(13) var gf_dehaze_texture: texture_2d<f32>;
 @group(0) @binding(14) var profile_lut_texture: texture_3d<f32>;
+@group(0) @binding(15) var reference_tone_texture: texture_2d<f32>;
 
 const GF_LUMA_FLOOR: f32 = 1.0e-4;
 const GF_DETAIL_SIGMA: f32 = 1.5;
@@ -501,6 +513,83 @@ fn apply_reference_basics(linear_rgb: vec3<f32>) -> vec3<f32> {
     return max(from_romm * srgb_to_linear(mapped), vec3<f32>(0.0));
 }
 
+fn reference_white_response(value: f32) -> f32 {
+    let count = adjustments.global.reference_white_curve_count;
+    if (count < 2u) { return value; }
+    if (value <= 1.0) {
+        return apply_curve(value, adjustments.global.reference_white_curve, count);
+    }
+    // The measured SDR endpoint is quantised and cannot provide an HDR slope.
+    // Extend with unit slope: extrapolating the final one-code interval can
+    // multiply highlights several times even when Whites is negative.
+    let last = adjustments.global.reference_white_curve[count - 1u];
+    return last.y / 255.0 + (value - 1.0);
+}
+
+fn apply_reference_whites(linear_rgb: vec3<f32>) -> vec3<f32> {
+    if (adjustments.global.reference_white_curve_count < 2u) { return linear_rgb; }
+    let to_romm = mat3x3<f32>(
+        vec3<f32>(0.52934593, 0.09837434, 0.01688322),
+        vec3<f32>(0.33007280, 0.87346102, 0.11767247),
+        vec3<f32>(0.14058127, 0.02816463, 0.86544431));
+    let from_romm = mat3x3<f32>(
+        vec3<f32>(2.03407594, -0.22881332, -0.00856984),
+        vec3<f32>(-0.72733421, 1.23173016, -0.15328657),
+        vec3<f32>(-0.30674173, -0.00291684, 1.16185641));
+    let wide = linear_to_srgb_extended(max(to_romm * linear_rgb, vec3<f32>(0.0)));
+    let lo = min(wide.r, min(wide.g, wide.b));
+    let hi = max(wide.r, max(wide.g, wide.b));
+    let out_lo = reference_white_response(lo);
+    let out_hi = reference_white_response(hi);
+    let mapped = vec3<f32>(out_lo) + (wide - vec3<f32>(lo)) * (out_hi - out_lo) / max(hi - lo, 0.000001);
+    return max(from_romm * srgb_to_linear(mapped), vec3<f32>(0.0));
+}
+
+fn reference_tone_gain(coord: vec2<u32>) -> f32 {
+    let dims=textureDimensions(reference_tone_texture);
+    let position=(vec2<f32>(coord)+0.5)/vec2<f32>(textureDimensions(input_texture))*vec2<f32>(dims)-0.5;
+    let low=vec2<i32>(floor(position)); let fraction=fract(position);
+    let limit=vec2<i32>(dims)-vec2<i32>(1);
+    let a=textureLoad(reference_tone_texture,clamp(low,vec2<i32>(0),limit),0).r;
+    let b=textureLoad(reference_tone_texture,clamp(low+vec2<i32>(1,0),vec2<i32>(0),limit),0).r;
+    let c=textureLoad(reference_tone_texture,clamp(low+vec2<i32>(0,1),vec2<i32>(0),limit),0).r;
+    let d=textureLoad(reference_tone_texture,clamp(low+vec2<i32>(1,1),vec2<i32>(0),limit),0).r;
+    return mix(mix(a,b,fraction.x),mix(c,d,fraction.x),fraction.y);
+}
+
+fn reference_grading_response(value: f32) -> f32 {
+    let count = adjustments.global.reference_grading_curve_count;
+    if (count < 2u) { return value; }
+    if (value <= 1.0) {
+        return apply_curve(value, adjustments.global.reference_grading_curve, count);
+    }
+    // Preserve headroom beyond the measured SDR interval. Clamping here would
+    // discard recoverable RAW highlight detail before the tone mapper.
+    let last = adjustments.global.reference_grading_curve[count - 1u];
+    let previous = adjustments.global.reference_grading_curve[count - 2u];
+    let slope = max(0.0, (last.y - previous.y) / max(last.x - previous.x, 0.001));
+    return last.y / 255.0 + (value - 1.0) * slope;
+}
+
+fn apply_reference_grading(linear_rgb: vec3<f32>) -> vec3<f32> {
+    if (adjustments.global.reference_grading_curve_count < 2u) { return linear_rgb; }
+    let to_romm = mat3x3<f32>(
+        vec3<f32>(0.52934593, 0.09837434, 0.01688322),
+        vec3<f32>(0.33007280, 0.87346102, 0.11767247),
+        vec3<f32>(0.14058127, 0.02816463, 0.86544431));
+    let from_romm = mat3x3<f32>(
+        vec3<f32>(2.03407594, -0.22881332, -0.00856984),
+        vec3<f32>(-0.72733421, 1.23173016, -0.15328657),
+        vec3<f32>(-0.30674173, -0.00291684, 1.16185641));
+    let wide = linear_to_srgb_extended(max(to_romm * linear_rgb, vec3<f32>(0.0)));
+    let lo = min(wide.r, min(wide.g, wide.b));
+    let hi = max(wide.r, max(wide.g, wide.b));
+    let out_lo = reference_grading_response(lo);
+    let out_hi = reference_grading_response(hi);
+    let mapped = vec3<f32>(out_lo) + (wide - vec3<f32>(lo)) * (out_hi - out_lo) / max(hi - lo, 0.000001);
+    return max(from_romm * srgb_to_linear(mapped), vec3<f32>(0.0));
+}
+
 fn apply_tonal_adjustments(
     color: vec3<f32>,
     local_log_detail: f32,
@@ -730,31 +819,36 @@ fn apply_filmic_exposure(color_in: vec3<f32>, brightness_adj: f32) -> vec3<f32> 
 }
 
 fn apply_color_calibration(color: vec3<f32>, cal: ColorCalibrationSettings) -> vec3<f32> {
-    let h_r = cal.red_hue;
-    let h_g = cal.green_hue;
-    let h_b = cal.blue_hue;
-    let r_prime = vec3<f32>(1.0 - abs(h_r), max(0.0, h_r), max(0.0, -h_r));
-    let g_prime = vec3<f32>(max(0.0, -h_g), 1.0 - abs(h_g), max(0.0, h_g));
-    let b_prime = vec3<f32>(max(0.0, h_b), max(0.0, -h_b), 1.0 - abs(h_b));
-    let hue_matrix = mat3x3<f32>(r_prime, g_prime, b_prime);
-    var c = hue_matrix * color;
+    var c = color;
+    if (adjustments.global.reference_calibration_stage == 1u) {
+        c = adjustments.global.reference_calibration_matrix * color;
+    } else if (adjustments.global.reference_calibration_stage == 0u) {
+        let h_r = cal.red_hue;
+        let h_g = cal.green_hue;
+        let h_b = cal.blue_hue;
+        let r_prime = vec3<f32>(1.0 - abs(h_r), max(0.0, h_r), max(0.0, -h_r));
+        let g_prime = vec3<f32>(max(0.0, -h_g), 1.0 - abs(h_g), max(0.0, h_g));
+        let b_prime = vec3<f32>(max(0.0, h_b), max(0.0, -h_b), 1.0 - abs(h_b));
+        let hue_matrix = mat3x3<f32>(r_prime, g_prime, b_prime);
+        c = hue_matrix * color;
 
-    let luma = get_luma(max(vec3(0.0), c));
-    let desaturated_color = vec3<f32>(luma);
-    let sat_vector = c - desaturated_color;
+        let luma = get_luma(max(vec3(0.0), c));
+        let desaturated_color = vec3<f32>(luma);
+        let sat_vector = c - desaturated_color;
 
-    let color_sum = c.r + c.g + c.b;
-    var masks = vec3<f32>(0.0);
-    if (color_sum > 0.001) {
-        masks = c / color_sum;
+        let color_sum = c.r + c.g + c.b;
+        var masks = vec3<f32>(0.0);
+        if (color_sum > 0.001) {
+            masks = c / color_sum;
+        }
+
+        let total_sat_adjustment =
+            masks.r * cal.red_saturation +
+            masks.g * cal.green_saturation +
+            masks.b * cal.blue_saturation;
+
+        c += sat_vector * total_sat_adjustment;
     }
-
-    let total_sat_adjustment =
-        masks.r * cal.red_saturation +
-        masks.g * cal.green_saturation +
-        masks.b * cal.blue_saturation;
-
-    c += sat_vector * total_sat_adjustment;
 
     let st = cal.shadows_tint;
     if (abs(st) > 0.001) {
@@ -1537,6 +1631,36 @@ fn is_default_curve(points: array<Point, 16>, count: u32) -> bool {
     return is_identity && p0_is_origin && p_last_is_end;
 }
 
+// Imported composite and channel curves are evaluated in the measured
+// wide working space. Existing native curves keep their original path.
+fn apply_reference_point_curves(color: vec3<f32>) -> vec3<f32> {
+    let a = adjustments.global;
+    if ((a.luma_curve_count < 2u || is_default_curve(a.luma_curve, a.luma_curve_count)) &&
+        (a.red_curve_count < 2u || is_default_curve(a.red_curve, a.red_curve_count)) &&
+        (a.green_curve_count < 2u || is_default_curve(a.green_curve, a.green_curve_count)) &&
+        (a.blue_curve_count < 2u || is_default_curve(a.blue_curve, a.blue_curve_count))) { return color; }
+    let to_romm = mat3x3<f32>(
+        vec3<f32>(0.52934593, 0.09837434, 0.01688322),
+        vec3<f32>(0.33007280, 0.87346102, 0.11767247),
+        vec3<f32>(0.14058127, 0.02816463, 0.86544431));
+    let from_romm = mat3x3<f32>(
+        vec3<f32>(2.03407594, -0.22881332, -0.00856984),
+        vec3<f32>(-0.72733421, 1.23173016, -0.15328657),
+        vec3<f32>(-0.30674173, -0.00291684, 1.16185641));
+    var wide = linear_to_srgb(max(to_romm * srgb_to_linear(color), vec3<f32>(0.0)));
+    if (!is_default_curve(a.luma_curve, a.luma_curve_count)) {
+        let lo = min(wide.r, min(wide.g, wide.b));
+        let hi = max(wide.r, max(wide.g, wide.b));
+        let out_lo = apply_curve(lo, a.luma_curve, a.luma_curve_count);
+        let out_hi = apply_curve(hi, a.luma_curve, a.luma_curve_count);
+        wide = vec3<f32>(out_lo) + (wide - vec3<f32>(lo)) * (out_hi - out_lo) / max(hi - lo, 0.000001);
+    }
+    if (!is_default_curve(a.red_curve, a.red_curve_count)) { wide.r = apply_curve(wide.r, a.red_curve, a.red_curve_count); }
+    if (!is_default_curve(a.green_curve, a.green_curve_count)) { wide.g = apply_curve(wide.g, a.green_curve, a.green_curve_count); }
+    if (!is_default_curve(a.blue_curve, a.blue_curve_count)) { wide.b = apply_curve(wide.b, a.blue_curve, a.blue_curve_count); }
+    return linear_to_srgb(max(from_romm * srgb_to_linear(wide), vec3<f32>(0.0)));
+}
+
 fn apply_all_curves(
     color: vec3<f32>,
     luma_curve: array<Point, 16>, luma_curve_count: u32,
@@ -1950,7 +2074,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var composite_rgb_linear = apply_dehaze(processed_rgb, structure_blurred, dehaze_dark, is_raw, t_dehaze);
     composite_rgb_linear = apply_white_balance(composite_rgb_linear, t_wb_log_gains);
     composite_rgb_linear = apply_centre_tonal_and_color(composite_rgb_linear, adjustments.global.centre, absolute_coord_i);
+    if (adjustments.global.reference_grading_stage == 1u) {
+        composite_rgb_linear = apply_reference_grading(composite_rgb_linear);
+    }
     if (adjustments.global.tonemapper_mode == 2u && is_raw == 1u) {
+        if (adjustments.global.reference_calibration_stage == 2u) {
+            composite_rgb_linear = adjustments.global.reference_calibration_matrix * composite_rgb_linear;
+        }
+        if (adjustments.global.reference_tone_version == 1u) {
+            composite_rgb_linear = apply_reference_whites(composite_rgb_linear);
+            composite_rgb_linear *= exp(reference_tone_gain(absolute_coord));
+        }
         composite_rgb_linear = apply_reference_basics(composite_rgb_linear);
         // The global reference curve already includes these controls. Local
         // mask changes continue to use the native detail-aware adjustments.
@@ -1974,12 +2108,25 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     composite_rgb_linear = apply_hue_shift(composite_rgb_linear, t_hue);
     composite_rgb_linear = apply_creative_color(composite_rgb_linear, t_saturation, t_vibrance);
 
+    var global_shadows = adjustments.global.color_grading_shadows;
+    var global_midtones = adjustments.global.color_grading_midtones;
+    var global_highlights = adjustments.global.color_grading_highlights;
+    var global_grade = adjustments.global.color_grading_global;
+    if (adjustments.global.reference_grading_curve_count >= 2u) {
+        if (adjustments.global.reference_grading_stage == 0u) {
+            composite_rgb_linear = apply_reference_grading(composite_rgb_linear);
+        }
+        global_shadows.luminance = 0.0;
+        global_midtones.luminance = 0.0;
+        global_highlights.luminance = 0.0;
+        global_grade.luminance = 0.0;
+    }
     composite_rgb_linear = apply_color_grading(
         composite_rgb_linear,
-        adjustments.global.color_grading_shadows,
-        adjustments.global.color_grading_midtones,
-        adjustments.global.color_grading_highlights,
-        adjustments.global.color_grading_global,
+        global_shadows,
+        global_midtones,
+        global_highlights,
+        global_grade,
         adjustments.global.color_grading_blending,
         adjustments.global.color_grading_balance
     );
@@ -2041,6 +2188,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         base_srgb = default_tonemapped;
     }
 
+    if (adjustments.global.reference_grading_stage == 2u && adjustments.global.reference_grading_curve_count >= 2u) {
+        base_srgb = linear_to_srgb(apply_reference_grading(srgb_to_linear(base_srgb)));
+    }
     base_srgb = apply_filmic_exposure(base_srgb, t_brightness);
 
     if (adjustments.global.xmp_parametric_curve_count >= 2u) {
@@ -2053,12 +2203,20 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         ); }
     }
 
-    var final_rgb = apply_all_curves(base_srgb,
+    var final_rgb: vec3<f32>;
+    if (adjustments.global.reference_point_curve_version == 1u) {
+        final_rgb = apply_reference_point_curves(base_srgb);
+    } else {
+        final_rgb = apply_all_curves(base_srgb,
         adjustments.global.luma_curve, adjustments.global.luma_curve_count,
         adjustments.global.red_curve, adjustments.global.red_curve_count,
         adjustments.global.green_curve, adjustments.global.green_curve_count,
         adjustments.global.blue_curve, adjustments.global.blue_curve_count
     );
+    }
+    if (adjustments.global.reference_grading_stage == 3u && adjustments.global.reference_grading_curve_count >= 2u) {
+        final_rgb = linear_to_srgb(apply_reference_grading(srgb_to_linear(final_rgb)));
+    }
 
     for (var i = 0u; i < adjustments.mask_count; i = i + 1u) {
         let influence = get_mask_influence(i, absolute_coord);

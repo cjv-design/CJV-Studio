@@ -1,14 +1,24 @@
 // Local diagnostic helper. Input photos and presets are never uploaded.
 use cjv_preset_converter_tests::{
-    enhanced_profile, imported_curve, preset_converter, sony_white_balance,
+    enhanced_profile, imported_curve, preset_converter, reference_basic, sony_white_balance,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 3 {
-        return Err("Usage: cjv-preset-converter-tests xmp|xmp-profile|sony-wb|curve FILE".into());
+        return Err(
+            "Usage: cjv-preset-converter-tests xmp|xmp-profile|sony-wb|curve|basic-curve FILE"
+                .into(),
+        );
     }
     match args[1].as_str() {
+        "basic-curve" => {
+            let settings = serde_json::from_str(&std::fs::read_to_string(&args[2])?)?;
+            println!(
+                "{}",
+                serde_json::to_string(&reference_basic::points(&settings))?
+            );
+        }
         "curve" => {
             let settings = serde_json::from_str(&std::fs::read_to_string(&args[2])?)?;
             println!(

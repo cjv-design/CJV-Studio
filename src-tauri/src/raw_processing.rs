@@ -75,7 +75,9 @@ fn source_calibration(
         "sony-linear-arw"
     } else if matches!(raw.photometric, RawPhotometricInterpretation::Cfa(_)) && raw.cpp == 1 {
         "sony-mosaic-arw"
-    } else { return None; };
+    } else {
+        return None;
+    };
     crate::camera_calibration::load(&hex::encode(Sha256::digest(bytes)), &raw.model)
         .filter(|p| p.input_kind == kind)
 }
@@ -264,11 +266,10 @@ fn develop_internal(
 
     let safe_highlight_compression = 1000.0;
 
-    let clamp_limit = if fast_demosaic {
-        1.0
-    } else {
-        safe_highlight_compression
-    };
+    // Fast decoding changes spatial detail, not the available RAW headroom.
+    // Clipping previews to 1.0 made highlight recovery and lowered exposure
+    // disagree with the full-resolution editor/export.
+    let clamp_limit = safe_highlight_compression;
 
     let (width, height) = {
         let dim = developed_intermediate.dim();
@@ -416,4 +417,24 @@ pub fn get_fast_demosaic_scale_factor(
         }
     }
     1.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fast_linear_raw_preserves_the_same_hdr_headroom_as_full_decode() {
+        // Own synthetic DNG: neutral RGB patches at 0.25, 1, 2 and 4 times white.
+        let bytes = include_bytes!("../tests/fixtures/linear-hdr.dng");
+        let full = develop_raw_image(bytes, false, 2.5, "linear".into(), None)
+            .unwrap()
+            .to_rgb32f();
+        let fast = develop_raw_image(bytes, true, 2.5, "linear".into(), None)
+            .unwrap()
+            .to_rgb32f();
+        assert_eq!(full.dimensions(), fast.dimensions());
+        assert!(full.as_raw().iter().copied().fold(0.0_f32, f32::max) > 3.0);
+        assert_eq!(full, fast);
+    }
 }

@@ -244,12 +244,8 @@ pub fn downscale_f32_image(image: &DynamicImage, nwidth: u32, nheight: u32) -> D
     }
 
     let ratio = (nwidth as f32 / width as f32).min(nheight as f32 / height as f32);
-    let new_w = (width as f32 * ratio).round() as u32;
-    let new_h = (height as f32 * ratio).round() as u32;
-
-    if new_w == 0 || new_h == 0 {
-        return image.clone();
-    }
+    let new_w = (width as f32 * ratio).round().max(1.0) as u32;
+    let new_h = (height as f32 * ratio).round().max(1.0) as u32;
 
     let tmp_img;
     let img_ref = if let Some(rgb) = image.as_rgb32f() {
@@ -1435,8 +1431,8 @@ pub struct AutoAdjustmentResults {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Pod, Zeroable, Default)]
 #[repr(C)]
 pub struct Point {
-    x: f32,
-    y: f32,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
     _pad1: f32,
     _pad2: f32,
 }
@@ -1478,6 +1474,12 @@ pub struct GpuMat3 {
     col0: [f32; 4],
     col1: [f32; 4],
     col2: [f32; 4],
+}
+
+impl GpuMat3 {
+    pub(crate) fn transform(&self,v:[f32;3]) -> [f32;3] {
+        std::array::from_fn(|i| self.col0[i]*v[0]+self.col1[i]*v[1]+self.col2[i]*v[2])
+    }
 }
 
 impl Default for GpuMat3 {
@@ -1560,11 +1562,21 @@ pub struct GlobalAdjustments {
     _pad3: f32,
 
     pub color_calibration: ColorCalibrationSettings,
+    pub reference_calibration_matrix: GpuMat3,
 
     pub hsl: [HslColor; 8],
+    pub reference_grading_curve: [Point; 16],
+    pub reference_grading_curve_count: u32,
+    pub reference_grading_stage: u32,
+    pub reference_point_curve_version: u32,
+    pub reference_calibration_stage: u32,
+    pub reference_white_curve: [Point; 16],
+    pub reference_white_curve_count: u32,
+    _pad_reference_white: [u32;3],
     pub reference_basic_curve: [Point; 16],
     pub reference_basic_curve_count: u32,
-    _pad_reference_curve: [u32; 3],
+    pub reference_tone_version: u32,
+    _pad_reference_curve: [u32; 2],
     pub xmp_parametric_curve: [Point; 16],
     pub xmp_parametric_curve_count: u32,
     pub xmp_curve_version: u32,
@@ -2257,8 +2269,24 @@ fn get_global_adjustments_from_json(
 
     let resolved_tonemapper = tonemapper_override.unwrap_or_else(|| match tone_mapper { "agx" => 1, "reference" => 2, _ => 0 });
     let reference_raw = resolved_tonemapper == 2 && is_raw;
+    let updated_reference = reference_raw && js_adjustments["referenceRenderingVersion"].as_u64() == Some(2);
+    let grading_stage = if updated_reference { 3 } else { js_adjustments["referenceGradingStage"].as_u64().unwrap_or(0).min(3) as u32 };
+    let adaptive_tone = reference_raw && is_visible("basic")
+        && (updated_reference || js_adjustments["referenceToneVersion"].as_u64() == Some(1))
+        && (js_adjustments["highlights"].as_f64().unwrap_or(0.0) != 0.0 || js_adjustments["shadows"].as_f64().unwrap_or(0.0) != 0.0);
+    let mut remaining_basics = js_adjustments.clone();
+    if adaptive_tone {
+        for key in ["highlights", "shadows", "whites"] { remaining_basics[key] = serde_json::json!(0); }
+    }
     let reference_points = if reference_raw && is_visible("basic") {
-        crate::reference_basic::points(js_adjustments)
+        crate::reference_basic::points(&remaining_basics)
+    } else { Vec::new() };
+    let white_points = if adaptive_tone {
+        crate::reference_basic::points(&serde_json::json!({"whites":js_adjustments["whites"]}))
+    } else { Vec::new() };
+
+    let grading_points = if reference_raw && is_visible("color") && (updated_reference || js_adjustments["referenceGradingVersion"].as_u64() == Some(1)) {
+        crate::reference_grading::points_in_space(&js_adjustments["colorGrading"], grading_stage >= 2)
     } else { Vec::new() };
 
     GlobalAdjustments {
@@ -2400,6 +2428,10 @@ fn get_global_adjustments_from_json(
         _pad3: 0.0,
 
         color_calibration: color_cal_settings,
+        reference_calibration_matrix: {
+            let m = crate::reference_calibration::matrix(&cal_obj);
+            GpuMat3 { col0: [m[0][0], m[1][0], m[2][0], 0.0], col1: [m[0][1], m[1][1], m[2][1], 0.0], col2: [m[0][2], m[1][2], m[2][2], 0.0] }
+        },
 
         hsl: if is_visible("color") {
             parse_hsl_adjustments(&js_adjustments.get("hsl").cloned().unwrap_or_default())
@@ -2407,9 +2439,18 @@ fn get_global_adjustments_from_json(
             [HslColor::default(); 8]
         },
         luma_curve: convert_points_to_aligned(luma_points.clone()),
+        reference_grading_curve: convert_points_to_aligned(grading_points.clone()),
+        reference_grading_curve_count: grading_points.len() as u32,
+        reference_grading_stage: grading_stage,
+        reference_point_curve_version: if updated_reference { 1 } else if reference_raw { js_adjustments["referencePointCurveVersion"].as_u64().unwrap_or(0).min(1) as u32 } else { 0 },
+        reference_calibration_stage: if reference_raw && is_visible("color") { if updated_reference { 1 } else { js_adjustments["referenceCalibrationStage"].as_u64().unwrap_or(0).min(2) as u32 } } else { 0 },
+        reference_white_curve: convert_points_to_aligned(white_points.clone()),
+        reference_white_curve_count: white_points.len() as u32,
+        _pad_reference_white: [0;3],
         reference_basic_curve: convert_points_to_aligned(reference_points.clone()),
         reference_basic_curve_count: reference_points.len() as u32,
-        _pad_reference_curve: [0; 3],
+        reference_tone_version: u32::from(adaptive_tone),
+        _pad_reference_curve: [0; 2],
         xmp_parametric_curve: convert_points_to_aligned(xmp_points.clone()),
         xmp_parametric_curve_count: xmp_points.len() as u32,
         xmp_curve_version: js_adjustments["xmpParametricCurve"]["version"].as_u64().unwrap_or(1).min(2) as u32,
@@ -3763,4 +3804,53 @@ pub async fn sample_white_balance(
     })
     .await
     .map_err(|e| format!("Task execution failed: {}", e))?
+}
+
+#[cfg(test)]
+mod reference_rendering_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn saved_legacy_edits_and_non_raw_images_do_not_enable_updated_rendering() {
+        let mut settings=json!({"toneMapper":"reference","highlights":-40,"shadows":46});
+        let legacy=get_global_adjustments_from_json(&settings,true,[0.0;3],None);
+        assert_eq!(legacy.reference_tone_version,0);
+        assert_eq!(legacy.reference_point_curve_version,0);
+        settings["referenceRenderingVersion"]=json!(2);
+        let bitmap=get_global_adjustments_from_json(&settings,false,[0.0;3],None);
+        assert_eq!(bitmap.reference_tone_version,0);
+        assert_eq!(bitmap.reference_point_curve_version,0);
+        assert_eq!(bitmap.reference_calibration_stage,0);
+    }
+
+    #[test]
+    fn updated_raw_rendering_respects_section_visibility() {
+        let mut settings=json!({"toneMapper":"reference","referenceRenderingVersion":2,
+            "highlights":-40,"shadows":46,"whites":-31.2,
+            "colorGrading":{"shadows":{"luminance":-59},"highlights":{"luminance":85}}});
+        let active=get_global_adjustments_from_json(&settings,true,[0.0;3],None);
+        assert_eq!(active.reference_tone_version,1);
+        assert_eq!(active.reference_point_curve_version,1);
+        assert_eq!(active.reference_calibration_stage,1);
+        assert_eq!(active.reference_grading_stage,3);
+        assert!(active.reference_grading_curve_count>=2);
+        assert!(active.reference_white_curve_count>=2);
+        settings["sectionVisibility"]=json!({"basic":false,"color":false});
+        let hidden=get_global_adjustments_from_json(&settings,true,[0.0;3],None);
+        assert_eq!(hidden.reference_tone_version,0);
+        assert_eq!(hidden.reference_white_curve_count,0);
+        assert_eq!(hidden.reference_calibration_stage,0);
+        assert_eq!(hidden.reference_grading_curve_count,0);
+    }
+
+    #[test]
+    fn negative_whites_do_not_amplify_hdr_tone_guide_from_quantised_endpoint() {
+        let settings=json!({"toneMapper":"reference","referenceRenderingVersion":2,
+            "highlights":-40,"shadows":46,"whites":-31.2});
+        let global=get_global_adjustments_from_json(&settings,true,[0.0;3],None);
+        let source=image::Rgb32FImage::from_pixel(4,4,image::Rgb([4.0;3]));
+        let map=crate::reference_tone_image::build(&source,&global).unwrap();
+        assert!(map.pixels.iter().all(|p| (p[1]-4.0_f32.ln()).abs()<0.001));
+    }
 }

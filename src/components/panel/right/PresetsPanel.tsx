@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { mergePresetCalibration, scalePresetCalibration } from '../../../utils/presetCalibration';
 import { mixPresetWhiteBalance } from '../../../utils/presetWhiteBalance';
+import { presetReferenceRendering } from '../../../utils/presetReferenceRendering';
 import { mixImportedCurve } from '../../../utils/presetImportedCurve';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import {
@@ -926,6 +927,7 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
     setAdjustments((prevAdjustments: Adjustments) => ({
       ...prevAdjustments,
       ...preset.adjustments,
+      ...presetReferenceRendering(preset.adjustments),
       ...mixPresetWhiteBalance(prevAdjustments, preset.adjustments, selectedImage?.asShotWhiteBalance, 100),
       colorCalibration: mergePresetCalibration(
         prevAdjustments.colorCalibration || INITIAL_ADJUSTMENTS.colorCalibration,
@@ -941,6 +943,7 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         ...mixed,
+        ...presetReferenceRendering(preset.adjustments),
         ...mixPresetWhiteBalance(
           baseAdjustments ?? prev,
           preset.adjustments,

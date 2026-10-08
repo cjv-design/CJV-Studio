@@ -124,6 +124,9 @@ pub struct CachedPreview {
 }
 
 pub struct GpuImageCache {
+    pub reference_tone_preview: Option<image::Rgb32FImage>,
+    pub reference_tone_map: Option<crate::reference_tone_image::ToneMap>,
+    pub reference_tone_key: Option<u64>,
     pub texture: Texture,
     pub texture_view: TextureView,
     pub gf_coeffs_view: TextureView,

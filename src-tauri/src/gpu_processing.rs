@@ -1087,6 +1087,17 @@ impl GpuProcessor {
             count: None,
         });
 
+        bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 15,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        });
+
         let main_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Main BGL"),
             entries: &bind_group_layout_entries,
@@ -1544,6 +1555,7 @@ impl GpuProcessor {
     #[allow(clippy::too_many_arguments)]
     fn run(
         &self,
+        reference_tone: Option<&crate::reference_tone_image::ToneMap>,
         input_texture_view: &wgpu::TextureView,
         gf_coeffs_view: &wgpu::TextureView,
         gf_dehaze_view: &wgpu::TextureView,
@@ -1559,7 +1571,7 @@ impl GpuProcessor {
         const MAX_MASK_BINDINGS: u32 = 1;
 
         if request.adjustments.global.profile_lut_id == u32::MAX {
-            return Err("The imported film profile is unavailable. Re-import the original XMP preset on this computer, or set Profile amount to zero.".into());
+            return Err("The imported film profile is unavailable. Re-import the original XMP preset on this computer, or switch off Imported film profile.".into());
         }
 
         if output_precision == RenderOutputPrecision::SixteenBit && output_to_display {
@@ -1592,6 +1604,18 @@ impl GpuProcessor {
                     4,
                 )
             };
+
+        let tone_size = reference_tone.map_or((1,1), |m| (m.width,m.height));
+        let tone_pixels: &[[f32;4]] = reference_tone.map_or(&[[0.0;4]], |m| m.pixels.as_slice());
+        let tone_texture = device.create_texture_with_data(queue, &wgpu::TextureDescriptor {
+            label: Some("Reference Tone Map"),
+            size: wgpu::Extent3d { width:tone_size.0,height:tone_size.1,depth_or_array_layers:1 },
+            mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,
+            format:wgpu::TextureFormat::Rgba32Float,
+            usage:wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats:&[],
+        },TextureDataOrder::MipMajor,bytemuck::cast_slice(tone_pixels));
+        let tone_view=tone_texture.create_view(&Default::default());
 
         let bounds = request.roi.unwrap_or(Roi {
             x: 0,
@@ -2047,6 +2071,7 @@ impl GpuProcessor {
                     binding: 14,
                     resource: wgpu::BindingResource::TextureView(&profile_view),
                 });
+                bind_group_entries.push(wgpu::BindGroupEntry { binding:15,resource:wgpu::BindingResource::TextureView(&tone_view) });
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("Tile Bind Group"),
                     layout: output_bgl,
@@ -2246,13 +2271,9 @@ fn process_and_get_dynamic_image_inner(
 
     let max_dim = context.limits.max_texture_dimension_2d;
     if width > max_dim || height > max_dim {
-        log::warn!(
-            "Image dimensions ({}x{}) exceed GPU limits ({}). Bypassing GPU processing and returning unprocessed image to prevent a crash. Try upgrading your GPU :)",
-            width,
-            height,
-            max_dim
-        );
-        return Ok(base_image.clone());
+        return Err(format!(
+            "This image is {width} x {height} pixels, which exceeds this GPU's {max_dim}-pixel limit. Rendering stopped so an unedited image cannot be mistaken for the finished result."
+        ));
     }
 
     let mut processor_lock = match state.gpu_processor.lock() {
@@ -2363,6 +2384,9 @@ fn process_and_get_dynamic_image_inner(
             processor.build_guided_coeffs(&texture_view, width, height, is_raw);
 
         *cache_lock = Some(GpuImageCache {
+            reference_tone_preview: None,
+            reference_tone_map: None,
+            reference_tone_key: None,
             texture,
             texture_view,
             gf_coeffs_view,
@@ -2374,11 +2398,25 @@ fn process_and_get_dynamic_image_inner(
         });
     }
 
+    if request.adjustments.global.reference_tone_version == 1 {
+        let cache=cache_lock.as_mut().unwrap();
+        if cache.reference_tone_preview.is_none() {
+            cache.reference_tone_preview=Some(crate::reference_tone_image::preview(base_image));
+        }
+        let key=crate::reference_tone_image::cache_key(&request.adjustments.global);
+        if cache.reference_tone_key!=Some(key) {
+            let map=crate::reference_tone_image::build(cache.reference_tone_preview.as_ref().unwrap(),&request.adjustments.global)?;
+            cache.reference_tone_map=Some(map);
+            cache.reference_tone_key=Some(key);
+        }
+    }
     let cache = cache_lock.as_ref().unwrap();
 
     let skip_readback = output_to_display;
 
+    let tone_map=if request.adjustments.global.reference_tone_version==1 { cache.reference_tone_map.as_ref() } else { None };
     let (processed_pixels, out_w, out_h, out_x, out_y) = processor.run(
+        tone_map,
         &cache.texture_view,
         &cache.gf_coeffs_view,
         &cache.gf_dehaze_view,

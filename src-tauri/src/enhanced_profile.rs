@@ -291,7 +291,13 @@ pub fn import_reference(
             let Some(content) = read_xmp(path) else {
                 continue;
             };
-            if !content.contains(uuid) {
+            // UUIDs are ASCII hex and case-insensitive. Keep this inexpensive
+            // prefilter consistent with the identity check below.
+            if !content
+                .as_bytes()
+                .windows(uuid.len())
+                .any(|part| part.eq_ignore_ascii_case(uuid.as_bytes()))
+            {
                 continue;
             }
             let Ok(a) = attrs(&content) else {
@@ -682,5 +688,27 @@ mod tests {
         let loaded = load_adjustment(&imported).unwrap();
         assert_eq!(loaded.table_amount, 0.5);
         assert_eq!(loaded.delta_amount, 0.25);
+    }
+
+    #[test]
+    fn installed_profile_resolves_when_uuid_letter_case_differs() {
+        let dir = TestDirectory::new();
+        let id = "abcdef0123456789abcdef0123456789";
+        let source = format!(
+            r#"<rdf:Description crs:PresetType="Look" crs:UUID="{}" crs:Exposure2012="0.25"></rdf:Description>"#,
+            id.to_ascii_uppercase()
+        );
+        std::fs::write(dir.0.join("own.xmp"), source).unwrap();
+        let reference = format!(
+            r#"<crs:Look><rdf:Description crs:UUID="{id}" crs:Amount="1"></rdf:Description></crs:Look>"#
+        );
+        let imported = import_reference(&reference, &[dir.0.clone()], &dir.0.join("cache"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(imported["uuid"], id.to_ascii_uppercase());
+        assert_eq!(
+            load_adjustment(&imported).unwrap().profile.deltas["exposure"],
+            0.25
+        );
     }
 }
