@@ -324,7 +324,8 @@ pub fn import_reference(
     }
     Ok(Some(
         json!({ "uuid": profile.uuid, "name": profile.name, "amount": amount, "path": path,
-        "minAmount": 0.0, "maxAmount": profile.table.as_ref().map_or(2.0, |t| t.max_amount) }),
+        "amountVersion": 2, "enabled": true, "minAmount": 0.0, "maxAmount": 2.0,
+        "tableMinAmount": profile.table.as_ref().map_or(0.0, |t| t.min_amount) }),
     ))
 }
 
@@ -335,16 +336,40 @@ struct Registry {
 }
 static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
 
-pub fn load_adjustment(adj: &Value) -> Option<(u32, f32, Arc<Profile>)> {
+pub struct LoadedAdjustment {
+    pub id: u32,
+    pub table_amount: f32,
+    pub delta_amount: f32,
+    pub profile: Arc<Profile>,
+}
+
+/// A zero XMP amount can still retain a table's minimum strength. Legacy edits
+/// keep zero-as-disabled semantics, including when their cache is unavailable.
+pub fn is_requested(adj: &Value) -> bool {
+    if !adj.is_object() || adj["enabled"].as_bool() == Some(false) {
+        return false;
+    }
+    let amount = adj["amount"].as_f64().filter(|v| v.is_finite());
+    if amount.is_none_or(|v| v > 0.0) {
+        return true;
+    }
+    adj["amountVersion"].as_u64() == Some(2)
+        && adj["tableMinAmount"]
+            .as_f64()
+            .filter(|v| v.is_finite())
+            .is_none_or(|v| v > 0.0)
+}
+
+pub fn load_adjustment(adj: &Value) -> Option<LoadedAdjustment> {
+    if !is_requested(adj) {
+        return None;
+    }
     let path = adj["path"].as_str()?;
     let uuid = adj["uuid"].as_str()?;
     let requested = adj["amount"]
         .as_f64()
         .filter(|v| v.is_finite())?
         .clamp(0.0, 2.0) as f32;
-    if requested <= 0.0 {
-        return None;
-    }
     let mut registry = REGISTRY.get_or_init(Default::default).lock().ok()?;
     let id = if let Some(id) = registry.paths.get(path) {
         *id
@@ -388,11 +413,24 @@ pub fn load_adjustment(adj: &Value) -> Option<(u32, f32, Arc<Profile>)> {
     if !profile.uuid.eq_ignore_ascii_case(uuid) {
         return None;
     }
-    let amount = profile
+    let table_amount = profile
         .table
         .as_ref()
         .map_or(requested, |t| requested.clamp(t.min_amount, t.max_amount));
-    Some((id, amount, profile))
+    // XMP Look Amount is already the stored profile strength. The RGB table
+    // clamps its own range, while hidden basic adjustments use the requested
+    // strength. Preserve the old shared clamp for existing saved edits.
+    let delta_amount = if adj["amountVersion"].as_u64() == Some(2) {
+        requested
+    } else {
+        table_amount
+    };
+    Some(LoadedAdjustment {
+        id,
+        table_amount,
+        delta_amount,
+        profile,
+    })
 }
 
 pub fn lookup(id: u32) -> Option<Arc<Profile>> {
@@ -531,5 +569,118 @@ mod tests {
         let expected =
             46.0 + p.deltas.get("shadows").copied().unwrap_or(0.0) / 1.5 * 0.78_f32 as f64;
         assert!((reference["shadows"].as_f64().unwrap() - expected).abs() < 0.00001);
+    }
+
+    struct TestDirectory(PathBuf);
+    impl TestDirectory {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("cjv-profile-test-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn table_limits_do_not_limit_hidden_adjustments_in_new_imports() {
+        let dir = TestDirectory::new();
+        let path = dir.0.join("profile.json");
+        let mut table = decode_rgb_table(&encode(&identity_record())).unwrap();
+        table.min_amount = 0.5;
+        table.max_amount = 1.5;
+        let profile = Profile {
+            schema: 1,
+            uuid: "ABCDEF0123456789ABCDEF0123456789".into(),
+            name: "Own synthetic profile".into(),
+            table: Some(table),
+            deltas: BTreeMap::from([("exposure".into(), 0.4)]),
+        };
+        std::fs::write(&path, serde_json::to_vec(&profile).unwrap()).unwrap();
+        let mut adj = json!({"uuid":profile.uuid,"path":path,"amountVersion":2,"tableMinAmount":0.5,"amount":0});
+        let zero = load_adjustment(&adj).unwrap();
+        assert_eq!(zero.table_amount, 0.5);
+        assert_eq!(zero.delta_amount, 0.0);
+        assert_eq!(
+            with_deltas(
+                &json!({"exposure":0.1}),
+                &zero.profile,
+                zero.delta_amount,
+                true
+            )["exposure"],
+            0.1
+        );
+        adj["amount"] = json!(2);
+        let high = load_adjustment(&adj).unwrap();
+        assert_eq!(high.table_amount, 1.5);
+        assert_eq!(high.delta_amount, 2.0);
+        assert!(
+            (with_deltas(
+                &json!({"exposure":0.1}),
+                &high.profile,
+                high.delta_amount,
+                true
+            )["exposure"]
+                .as_f64()
+                .unwrap()
+                - 0.9)
+                .abs()
+                < 1e-6
+        );
+        adj["enabled"] = json!(false);
+        assert!(!is_requested(&adj));
+        assert!(load_adjustment(&adj).is_none());
+        adj["enabled"] = json!(true);
+        adj.as_object_mut().unwrap().remove("amountVersion");
+        let legacy = load_adjustment(&adj).unwrap();
+        assert_eq!(legacy.table_amount, 1.5);
+        assert_eq!(legacy.delta_amount, 1.5);
+        adj["amount"] = json!(0);
+        assert!(load_adjustment(&adj).is_none());
+    }
+
+    #[test]
+    fn zero_with_a_required_table_must_not_silently_lose_a_missing_profile() {
+        let mut adj = json!({"path":"not-a-profile-cache","uuid":"ABCDEF0123456789ABCDEF0123456789","amount":0,"amountVersion":2,"tableMinAmount":0.5});
+        assert!(is_requested(&adj));
+        assert!(load_adjustment(&adj).is_none());
+        adj["tableMinAmount"] = json!(0);
+        assert!(!is_requested(&adj));
+        adj["amount"] = json!(1);
+        assert!(is_requested(&adj));
+        adj["enabled"] = json!(false);
+        assert!(!is_requested(&adj));
+        assert!(!is_requested(&Value::Null));
+    }
+
+    #[test]
+    fn imported_profile_keeps_full_amount_range_and_records_table_minimum() {
+        let dir = TestDirectory::new();
+        let mut raw = identity_record();
+        raw[76..84].copy_from_slice(&0.5_f64.to_le_bytes());
+        raw[84..92].copy_from_slice(&1.5_f64.to_le_bytes());
+        let id = "ABCDEF0123456789ABCDEF0123456789";
+        let source = format!(
+            r#"<rdf:Description crs:PresetType="Look" crs:UUID="{id}" crs:RGBTable="{id}" crs:Table_{id}="{}"></rdf:Description>"#,
+            encode(&raw)
+        );
+        std::fs::write(dir.0.join("own.xmp"), source).unwrap();
+        let reference = format!(
+            r#"<crs:Look><rdf:Description crs:UUID="{id}" crs:Amount="0.25"></rdf:Description></crs:Look>"#
+        );
+        let imported = import_reference(&reference, &[dir.0.clone()], &dir.0.join("cache"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(imported["amount"], 0.25);
+        assert_eq!(imported["maxAmount"], 2.0);
+        assert_eq!(imported["tableMinAmount"], 0.5);
+        assert_eq!(imported["amountVersion"], 2);
+        let loaded = load_adjustment(&imported).unwrap();
+        assert_eq!(loaded.table_amount, 0.5);
+        assert_eq!(loaded.delta_amount, 0.25);
     }
 }

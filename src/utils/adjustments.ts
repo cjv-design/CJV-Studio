@@ -200,6 +200,9 @@ export interface Adjustments {
     amount: number;
     minAmount?: number;
     maxAmount?: number;
+    amountVersion?: 2;
+    tableMinAmount?: number;
+    enabled?: boolean;
   } | null;
   curveMode?: 'point' | 'parametric';
   crop: Crop | null;

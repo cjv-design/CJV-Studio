@@ -29,3 +29,6 @@ pub mod enhanced_profile;
 
 #[path = "../../../src-tauri/src/reference_basic.rs"]
 pub mod reference_basic;
+
+#[path = "../../../src-tauri/src/load_generation.rs"]
+pub mod load_generation;

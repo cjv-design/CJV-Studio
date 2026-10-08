@@ -3,6 +3,7 @@ import { Pipette, Sliders } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import Slider, { SliderChangeEvent } from '../ui/Slider';
+import Switch from '../ui/Switch';
 import ColorWheel from '../ui/ColorWheel';
 import { ColorAdjustment, ColorCalibration, HueSatLum, INITIAL_ADJUSTMENTS } from '../../utils/adjustments';
 import { Adjustments, ColorGrading, getAdjustmentToolOrder, getHiddenAdjustmentTools } from '../../utils/adjustments';
@@ -519,11 +520,21 @@ export default function ColorPanel({
     <div className="flex flex-col gap-4">
       {!isForMask && adjustments.xmpProfile && (
         <div className="p-3 rounded-lg bg-bg-secondary space-y-2">
-          <div className="text-xs text-text-secondary">Imported film profile</div>
+          <Switch
+            label="Imported film profile"
+            checked={adjustments.xmpProfile.enabled !== false}
+            onChange={(enabled: boolean) =>
+              setAdjustments((prev: Partial<Adjustments>) => ({
+                ...prev,
+                xmpProfile: { ...prev.xmpProfile!, enabled },
+              }))
+            }
+          />
           <div className="text-sm text-text-primary">{adjustments.xmpProfile.name}</div>
           <Slider
             label="Profile amount"
             value={adjustments.xmpProfile.amount * 100}
+            disabled={adjustments.xmpProfile.enabled === false}
             min={0}
             max={(adjustments.xmpProfile.maxAmount ?? 2) * 100}
             step={1}

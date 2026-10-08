@@ -2597,20 +2597,30 @@ pub fn get_all_adjustments_from_json(
     } else { None };
     let reference_raw = is_raw && tonemapper_override.map_or(
         js_adjustments["toneMapper"].as_str() == Some("reference"), |mode| mode == 2);
-    let effective = imported_profile.as_ref().map(|(_, amount, profile)|
-        crate::enhanced_profile::with_deltas(js_adjustments, profile, *amount, reference_raw));
+    let effective = imported_profile.as_ref().map(|loaded| {
+        crate::enhanced_profile::with_deltas(
+            js_adjustments,
+            &loaded.profile,
+            loaded.delta_amount,
+            reference_raw,
+        )
+    });
     let mut global = get_global_adjustments_from_json(
         effective.as_ref().unwrap_or(js_adjustments),
         is_raw,
         white_balance::adaptation_log_gains(as_shot_white_balance, target_white_balance),
         tonemapper_override,
     );
-    if let Some((id, amount, profile)) = imported_profile {
-        global.profile_lut_id = if profile.table.is_some() { id } else { 0 };
-        global.profile_amount = amount;
+    if let Some(loaded) = imported_profile {
+        global.profile_lut_id = if loaded.profile.table.is_some() {
+            loaded.id
+        } else {
+            0
+        };
+        global.profile_amount = loaded.table_amount;
     } else if is_section_visible(js_adjustments, "color")
-        && js_adjustments["xmpProfile"].is_object()
-        && js_adjustments["xmpProfile"]["amount"].as_f64().unwrap_or(1.0) > 0.0 {
+        && crate::enhanced_profile::is_requested(&js_adjustments["xmpProfile"])
+    {
         // Fail the render instead of silently exporting without a missing look.
         global.profile_lut_id = u32::MAX;
     }

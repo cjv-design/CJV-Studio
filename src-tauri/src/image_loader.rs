@@ -1017,12 +1017,19 @@ pub async fn load_image(
     let (orig_width, orig_height) = pristine_arc.dimensions();
     let as_shot_white_balance = crate::white_balance::as_shot_white_balance(&source_path_str);
 
-    *state.original_image.lock().unwrap() = Some(LoadedImage {
-        path,
-        image: pristine_arc,
-        is_raw,
-        as_shot_white_balance,
-    });
+    if !crate::load_generation::replace_if_current(
+        &state.original_image,
+        &state.load_image_generation,
+        my_generation,
+        LoadedImage {
+            path,
+            image: pristine_arc,
+            is_raw,
+            as_shot_white_balance,
+        },
+    ) {
+        return Err("Load cancelled".to_string());
+    }
 
     Ok(LoadImageResult {
         width: orig_width,

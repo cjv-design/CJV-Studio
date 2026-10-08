@@ -48,6 +48,7 @@ mod image_processing;
 mod inpainting;
 mod imported_curve;
 mod launch_request;
+mod load_generation;
 mod lens_blur;
 mod lens_correction;
 mod lut_processing;

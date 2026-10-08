@@ -82,7 +82,7 @@ jobs:
       - name: Install locked frontend dependencies
         run: npm ci
       - name: Check importer formatting
-        run: rustfmt --edition 2024 --check src-tauri/src/preset_converter.rs src-tauri/src/sony_white_balance.rs src-tauri/src/white_balance.rs src-tauri/src/camera_calibration.rs src-tauri/src/imported_curve.rs src-tauri/src/enhanced_profile.rs src-tauri/src/reference_basic.rs
+        run: rustfmt --edition 2024 --check src-tauri/src/preset_converter.rs src-tauri/src/sony_white_balance.rs src-tauri/src/white_balance.rs src-tauri/src/camera_calibration.rs src-tauri/src/imported_curve.rs src-tauri/src/enhanced_profile.rs src-tauri/src/reference_basic.rs src-tauri/src/load_generation.rs
       - name: Check frontend types
         run: npm run typecheck
       - name: Test asynchronous navigation
@@ -114,7 +114,7 @@ jobs:
             Format-List | Out-File installer-sha256.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: CJV-Studio-Alpha-0.1.4-Windows
+          name: CJV-Studio-Alpha-0.1.5-Windows
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
             installer-sha256.txt
@@ -137,7 +137,7 @@ jobs:
             Select-Object Hash,Path | ConvertTo-Json | Set-Content portable/checksums.json
       - uses: actions/upload-artifact@v4
         with:
-          name: CJV-Studio-Alpha-0.1.4-Portable
+          name: CJV-Studio-Alpha-0.1.5-Portable
           path: portable
           if-no-files-found: error
           retention-days: 14
