@@ -1,6 +1,7 @@
 """Prepare private per-image calibration using a locally installed DNG Converter.
 
-Only reduced-resolution Sony linear ARWs are supported in this first version.
+Sony linear ARWs are supported by default. --mosaic enables full-resolution
+Sony CFA inputs; their camera-neutral metadata is kept separate from linear RAWs.
 Reads originals; conversion goes into a temporary directory. No images or Adobe
 profiles are bundled or uploaded. Restart CJV after preparing new calibrations.
 """
@@ -63,12 +64,15 @@ def read_tags(path):
     return tags
 
 
-def calibration(source, dng, forward=False):
+def calibration(source, dng, forward=False, mosaic=False):
     raw_tags, t = read_tags(source), read_tags(dng)
     if source.suffix.lower() != ".arw" or "sony" not in str(raw_tags.get(271,"")).lower():
         raise ValueError("Only Sony ARW sources are supported")
-    if t.get(262) != [34892] or t.get(277) != [3] or t.get(50728) != [1.0,1.0,1.0]:
-        raise ValueError("Expected a reduced-resolution Sony linear RAW with baked white balance")
+    if mosaic:
+        if t.get(262) != [32803] or t.get(277) != [1]:
+            raise ValueError("Expected a Sony mosaic RAW")
+    elif t.get(262) != [34892] or t.get(277) != [3] or t.get(50728) != [1.0,1.0,1.0]:
+        raise ValueError("Expected a reduced-resolution Sony linear RAW with baked white balance; use --mosaic for CFA sources")
     if raw_tags.get(272) != t.get(272):
         raise ValueError("Source and DNG camera models differ")
     if t.get(50778) != [17] or t.get(50779) != [21]:
@@ -76,7 +80,7 @@ def calibration(source, dng, forward=False):
     if t.get(50931,"") != t.get(50932,""):
         raise ValueError("Camera and profile calibration signatures differ")
     result = {"schema":1, "enabled":True, "sourceSha256":hashlib.sha256(source.read_bytes()).hexdigest(),
-              "inputKind":"sony-linear-arw", "model":t[272], "useForwardMatrix":forward,
+              "inputKind":"sony-mosaic-arw" if mosaic else "sony-linear-arw", "model":t[272], "useForwardMatrix":forward,
               "provenance":"Metadata from a local Adobe DNG Converter conversion of this exact source"}
     for tag,key,n in [(50721,"colorMatrix1",9),(50722,"colorMatrix2",9),
         (50723,"cameraCalibration1",9),(50724,"cameraCalibration2",9),
@@ -96,6 +100,7 @@ def main():
     p.add_argument("--converter",type=Path,default=Path(os.environ.get("ProgramFiles","C:/Program Files"))/"Adobe/Adobe DNG Converter/Adobe DNG Converter.exe")
     p.add_argument("--cache",type=Path,default=Path(os.environ.get("APPDATA","."))/"au.com.cameronjonesvisuals.cjvstudio.alpha/camera-calibration")
     p.add_argument("--forward",action="store_true",help="Experimental ForwardMatrix rendering; validate before enabling")
+    p.add_argument("--mosaic",action="store_true",help="Prepare calibration for Sony CFA ARWs rather than reduced-resolution linear ARWs")
     args = p.parse_args()
     if not args.converter.is_file():
         p.error("Install Adobe DNG Converter or provide --converter")
@@ -109,7 +114,7 @@ def main():
             converted = list(Path(temp).glob("*.dng"))
             if result.returncode != 0 or len(converted) != 1:
                 raise RuntimeError("DNG conversion failed for " + source.name)
-            profile = calibration(source,converted[0],args.forward)
+            profile = calibration(source,converted[0],args.forward,args.mosaic)
             if profile["sourceSha256"] != before:
                 raise RuntimeError("Source changed during preparation")
             destination = args.cache / (before + ".json")

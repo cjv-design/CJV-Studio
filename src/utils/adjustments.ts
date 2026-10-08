@@ -192,6 +192,14 @@ export interface Adjustments {
   pointCurves?: Curves;
   parametricCurve?: ParametricCurve;
   xmpParametricCurve?: Record<string, number> | null;
+  xmpProfile?: {
+    uuid: string;
+    name: string;
+    path: string;
+    amount: number;
+    minAmount?: number;
+    maxAmount?: number;
+  } | null;
   curveMode?: 'point' | 'parametric';
   crop: Crop | null;
   dehaze: number;
@@ -256,7 +264,7 @@ export interface Adjustments {
   structure: number;
   temperature: number;
   tint: number;
-  toneMapper: 'agx' | 'basic';
+  toneMapper: 'agx' | 'basic' | 'reference';
   transformDistortion: number;
   transformVertical: number;
   transformHorizontal: number;
@@ -518,6 +526,7 @@ export const INITIAL_MASK_CONTAINER: MaskContainer = {
 
 export const INITIAL_ADJUSTMENTS: Adjustments = {
   xmpParametricCurve: null,
+  xmpProfile: null,
   aiPatches: [],
   aspectRatio: null,
   blacks: 0,
@@ -810,7 +819,7 @@ export const ADJUSTMENT_GROUPS: Record<string, AdjustmentGroup[]> = {
     },
     { label: 'modals.copyPaste.groups.colorGrading', keys: [ColorAdjustment.ColorGrading] },
     { label: 'modals.copyPaste.groups.colorMixer', keys: [ColorAdjustment.Hsl] },
-    { label: 'modals.copyPaste.groups.colorCalibration', keys: ['colorCalibration'] },
+    { label: 'modals.copyPaste.groups.colorCalibration', keys: ['colorCalibration', 'xmpProfile'] },
   ],
   details: [
     {
@@ -923,6 +932,7 @@ export const ADJUSTMENT_SECTIONS: Sections = {
     ColorAdjustment.Hsl,
     ColorAdjustment.ColorGrading,
     'colorCalibration',
+    'xmpProfile',
     ColorAdjustment.Hue,
   ],
   details: [

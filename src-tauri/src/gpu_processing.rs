@@ -1076,6 +1076,17 @@ impl GpuProcessor {
             count: None,
         });
 
+        bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 14,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D3,
+                multisampled: false,
+            },
+            count: None,
+        });
+
         let main_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Main BGL"),
             entries: &bind_group_layout_entries,
@@ -1547,6 +1558,10 @@ impl GpuProcessor {
         let scale = (width.min(height) as f32) / 1080.0;
         const MAX_MASK_BINDINGS: u32 = 1;
 
+        if request.adjustments.global.profile_lut_id == u32::MAX {
+            return Err("The imported film profile is unavailable. Re-import the original XMP preset on this computer, or set Profile amount to zero.".into());
+        }
+
         if output_precision == RenderOutputPrecision::SixteenBit && output_to_display {
             return Err(
                 "High-precision GPU output is only supported for CPU-readback renders.".to_string(),
@@ -1666,6 +1681,21 @@ impl GpuProcessor {
         } else {
             (self.dummy_lut_view.clone(), self.dummy_lut_sampler.clone())
         };
+
+        let profile = crate::enhanced_profile::lookup(request.adjustments.global.profile_lut_id);
+        let profile_view = if let Some(table) = profile.as_ref().and_then(|p| p.table.as_ref()) {
+            let rgba: Vec<f16> = table.data.chunks_exact(3).flat_map(|p|
+                [f16::from_f32(p[0]), f16::from_f32(p[1]), f16::from_f32(p[2]), f16::ONE]).collect();
+            let texture = device.create_texture_with_data(queue, &wgpu::TextureDescriptor {
+                label: Some("Imported Film Profile"),
+                size: wgpu::Extent3d { width: table.size, height: table.size, depth_or_array_layers: table.size },
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D3,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            }, TextureDataOrder::MipMajor, bytemuck::cast_slice(&rgba));
+            texture.create_view(&Default::default())
+        } else { self.dummy_lut_view.clone() };
 
         let adjustments = request.adjustments;
         if adjustments.global.flare_amount > 0.0 {
@@ -2013,6 +2043,10 @@ impl GpuProcessor {
                     resource: wgpu::BindingResource::TextureView(gf_dehaze_view),
                 });
 
+                bind_group_entries.push(wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::TextureView(&profile_view),
+                });
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("Tile Bind Group"),
                     layout: output_bgl,

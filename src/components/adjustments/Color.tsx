@@ -517,6 +517,26 @@ export default function ColorPanel({
 
   return (
     <div className="flex flex-col gap-4">
+      {!isForMask && adjustments.xmpProfile && (
+        <div className="p-3 rounded-lg bg-bg-secondary space-y-2">
+          <div className="text-xs text-text-secondary">Imported film profile</div>
+          <div className="text-sm text-text-primary">{adjustments.xmpProfile.name}</div>
+          <Slider
+            label="Profile amount"
+            value={adjustments.xmpProfile.amount * 100}
+            min={0}
+            max={(adjustments.xmpProfile.maxAmount ?? 2) * 100}
+            step={1}
+            onChange={(e: SliderChangeEvent) =>
+              setAdjustments((prev: Partial<Adjustments>) => ({
+                ...prev,
+                xmpProfile: { ...prev.xmpProfile!, amount: Number(e.target.value) / 100 },
+              }))
+            }
+            onDragStateChange={onDragStateChange}
+          />
+        </div>
+      )}
       {!hiddenTools.includes('whiteBalance') && (
         <AdjustmentSubSection
           actions={

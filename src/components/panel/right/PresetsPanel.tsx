@@ -201,6 +201,13 @@ const mixAdjustments = (presetObj: any, intensity: number, initialObj: any = INI
     const presetVal = presetObj[key];
     const initialVal = initialObj[key] !== undefined ? initialObj[key] : (INITIAL_ADJUSTMENTS as any)[key];
 
+    if (key === 'xmpProfile') {
+      result[key] = presetVal
+        ? { ...presetVal, amount: Math.max(0, Math.min(presetVal.maxAmount ?? 2, (presetVal.amount ?? 1) * fraction)) }
+        : null;
+      continue;
+    }
+
     if (key === 'xmpParametricCurve') {
       result[key] = mixImportedCurve(presetVal, intensity);
       continue;
@@ -350,9 +357,11 @@ function PresetItemDisplay({
             <div className="mt-3 px-1 pb-1">
               {Array.isArray(preset.adjustments?.xmpImportNotes) && (
                 <div className="mb-2 text-xs text-amber-300" role="note">
-                  {preset.adjustments.xmpImportNotes.filter((note: unknown) => typeof note === 'string').map((note: string) => (
-                    <p key={note}>{note}</p>
-                  ))}
+                  {preset.adjustments.xmpImportNotes
+                    .filter((note: unknown) => typeof note === 'string')
+                    .map((note: string) => (
+                      <p key={note}>{note}</p>
+                    ))}
                 </div>
               )}
               <Slider
@@ -932,7 +941,12 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         ...mixed,
-        ...mixPresetWhiteBalance(baseAdjustments ?? prev, preset.adjustments, selectedImage?.asShotWhiteBalance, intensity),
+        ...mixPresetWhiteBalance(
+          baseAdjustments ?? prev,
+          preset.adjustments,
+          selectedImage?.asShotWhiteBalance,
+          intensity,
+        ),
         colorCalibration: mergePresetCalibration(
           prev.colorCalibration || INITIAL_ADJUSTMENTS.colorCalibration,
           scalePresetCalibration(preset.adjustments.colorCalibration, intensity),

@@ -100,6 +100,7 @@ pub fn all_available_adjustments() -> HashSet<String> {
         "pointCurves",
         "parametricCurve",
         "xmpParametricCurve",
+        "xmpProfile",
         "curveMode",
         "highlights",
         "shadows",
@@ -771,6 +772,8 @@ pub fn load_settings(app_handle: AppHandle) -> Result<AppSettings, String> {
         if !new_features.is_empty() {
             for feature in new_features {
                 if default_included.contains(&feature)
+                    && (feature != "xmpProfile"
+                        || settings.copy_paste_settings.included_adjustments.contains("colorCalibration"))
                     && (feature != "xmpParametricCurve"
                         || settings.copy_paste_settings.included_adjustments.contains("curves")) {
                     settings

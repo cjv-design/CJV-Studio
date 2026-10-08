@@ -45,6 +45,13 @@ const ToneMapperSwitch = ({
         label: t('adjustments.basic.mappers.agx'),
         title: t('adjustments.basic.mappers.agxDesc'),
       },
+      {
+        id: 'reference',
+        label: t('adjustments.basic.mappers.reference', { defaultValue: 'Reference' }),
+        title: t('adjustments.basic.mappers.referenceDesc', {
+          defaultValue: 'Measured RAW tone response for imported presets. Camera colour is approximate.',
+        }),
+      },
     ],
     [t],
   );
@@ -171,7 +178,7 @@ export default function BasicAdjustments({
   const handleToneMapperChange = (mapper: string) => {
     setAdjustments((prev: Partial<Adjustments>) => ({
       ...prev,
-      toneMapper: mapper as 'basic' | 'agx',
+      toneMapper: mapper as 'basic' | 'agx' | 'reference',
     }));
   };
 

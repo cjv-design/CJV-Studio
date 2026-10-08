@@ -23,3 +23,9 @@ pub mod camera_calibration;
 
 #[path = "../../../src-tauri/src/imported_curve.rs"]
 pub mod imported_curve;
+
+#[path = "../../../src-tauri/src/enhanced_profile.rs"]
+pub mod enhanced_profile;
+
+#[path = "../../../src-tauri/src/reference_basic.rs"]
+pub mod reference_basic;

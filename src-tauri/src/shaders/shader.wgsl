@@ -72,8 +72,8 @@ struct GlobalAdjustments {
     lut_intensity: f32,
     tonemapper_mode: u32,
     lut_is_scene_referred: u32,
-    _pad_lut3: f32,
-    _pad_lut4: f32,
+    profile_lut_id: u32,
+    profile_amount: f32,
     _pad_lut5: f32,
 
     _pad_agx1: f32,
@@ -100,9 +100,14 @@ struct GlobalAdjustments {
     color_calibration: ColorCalibrationSettings,
 
     hsl: array<HslColor, 8>,
+    reference_basic_curve: array<Point, 16>,
+    reference_basic_curve_count: u32,
+    _pad_reference_curve1: u32,
+    _pad_reference_curve2: u32,
+    _pad_reference_curve3: u32,
     xmp_parametric_curve: array<Point, 16>,
     xmp_parametric_curve_count: u32,
-    _pad_xmp_curve1: u32,
+    xmp_curve_version: u32,
     _pad_xmp_curve2: u32,
     _pad_xmp_curve3: u32,
     luma_curve: array<Point, 16>,
@@ -220,6 +225,7 @@ const HSL_RANGES: array<HslRange, 8> = array<HslRange, 8>(
 
 @group(0) @binding(12) var gf_coeffs_texture: texture_2d<f32>;
 @group(0) @binding(13) var gf_dehaze_texture: texture_2d<f32>;
+@group(0) @binding(14) var profile_lut_texture: texture_3d<f32>;
 
 const GF_LUMA_FLOOR: f32 = 1.0e-4;
 const GF_DETAIL_SIGMA: f32 = 1.5;
@@ -370,7 +376,8 @@ fn interpolate_cubic_hermite(x: f32, p1: Point, p2: Point, m1: f32, m2: f32) -> 
     return h00 * p1.y + h10 * m1 * dx + h01 * p2.y + h11 * m2 * dx;
 }
 
-fn apply_curve(val: f32, points: array<Point, 16>, count: u32) -> f32 {
+fn apply_curve(val: f32, points: array<Point, 16>, requested_count: u32) -> f32 {
+    let count = min(requested_count, 16u);
     if (count < 2u) { return val; }
     var local_points = points;
     let x = val * 255.0;
@@ -381,7 +388,7 @@ fn apply_curve(val: f32, points: array<Point, 16>, count: u32) -> f32 {
         let p1 = local_points[i];
         let p2 = local_points[i + 1u];
         if (x <= p2.x) {
-            let p0 = local_points[max(0u, i - 1u)];
+            let p0 = local_points[max(1u, i) - 1u];
             let p3 = local_points[min(count - 1u, i + 2u)];
             let delta_before = (p1.y - p0.y) / max(0.001, p1.x - p0.x);
             let delta_current = (p2.y - p1.y) / max(0.001, p2.x - p1.x);
@@ -408,6 +415,90 @@ fn apply_curve(val: f32, points: array<Point, 16>, count: u32) -> f32 {
         }
     }
     return local_points[count - 1u].y / 255.0;
+}
+
+// Imported curves operate in a wide-gamut RGB space. Bradford-adapted sRGB
+// D65 <-> ROMM RGB D50 matrices; sRGB transfer functions retain the measured
+// gray response. Interpolating the middle channel preserves hue ordering.
+// Measured using a CJV-generated linear DNG gradient with neutral settings.
+// This is a tone response approximation, not an Adobe camera colour profile.
+fn reference_response(value: f32) -> f32 {
+    let samples = array<f32, 65>(0.00000000, 0.00784314, 0.01960784, 0.03137255, 0.04313725, 0.05882353, 0.07450980, 0.09019608, 0.10980392, 0.12941176, 0.15294118, 0.17647059, 0.20000000, 0.22745098, 0.25098039, 0.27843137, 0.30196078, 0.32941176, 0.35686275, 0.38039216, 0.40784314, 0.43529412, 0.46274510, 0.49019608, 0.51764706, 0.54509804, 0.56862745, 0.59607843, 0.61960784, 0.64313725, 0.66274510, 0.68431373, 0.70588235, 0.72156863, 0.74117647, 0.75686275, 0.77647059, 0.79215686, 0.80392157, 0.81960784, 0.83137255, 0.84705882, 0.85882353, 0.87058824, 0.87843137, 0.89019608, 0.90196078, 0.90980392, 0.91764706, 0.92549020, 0.93333333, 0.94117647, 0.94901961, 0.95686275, 0.96078431, 0.96862745, 0.97254902, 0.97647059, 0.98039216, 0.98431373, 0.98823529, 0.99215686, 0.99607843, 1.00000000, 1.00000000);
+    let code = clamp(value, 0.0, 1.0) * 255.0;
+    let i = min(u32(floor(code / 4.0)), 63u);
+    let width = select(4.0, 3.0, i == 63u);
+    return mix(samples[i], samples[i + 1u], (code - f32(i) * 4.0) / width);
+}
+
+fn reference_base_tonemap(linear_rgb: vec3<f32>) -> vec3<f32> {
+    let to_romm = mat3x3<f32>(
+        vec3<f32>(0.52934593, 0.09837434, 0.01688322),
+        vec3<f32>(0.33007280, 0.87346102, 0.11767247),
+        vec3<f32>(0.14058127, 0.02816463, 0.86544431));
+    let from_romm = mat3x3<f32>(
+        vec3<f32>(2.03407594, -0.22881332, -0.00856984),
+        vec3<f32>(-0.72733421, 1.23173016, -0.15328657),
+        vec3<f32>(-0.30674173, -0.00291684, 1.16185641));
+    let wide = linear_to_srgb(max(to_romm * linear_rgb, vec3<f32>(0.0)));
+    let lo = min(wide.r, min(wide.g, wide.b));
+    let hi = max(wide.r, max(wide.g, wide.b));
+    let out_lo = reference_response(lo);
+    let out_hi = reference_response(hi);
+    let mapped = vec3<f32>(out_lo) + (wide - vec3<f32>(lo)) * (out_hi - out_lo) / max(hi - lo, 0.000001);
+    return linear_to_srgb(max(from_romm * srgb_to_linear(mapped), vec3<f32>(0.0)));
+}
+
+fn apply_imported_curve(color: vec3<f32>) -> vec3<f32> {
+    let to_romm = mat3x3<f32>(
+        vec3<f32>(0.52934593, 0.09837434, 0.01688322),
+        vec3<f32>(0.33007280, 0.87346102, 0.11767247),
+        vec3<f32>(0.14058127, 0.02816463, 0.86544431)
+    );
+    let from_romm = mat3x3<f32>(
+        vec3<f32>(2.03407594, -0.22881332, -0.00856984),
+        vec3<f32>(-0.72733421, 1.23173016, -0.15328657),
+        vec3<f32>(-0.30674173, -0.00291684, 1.16185641)
+    );
+    let wide = linear_to_srgb(max(to_romm * srgb_to_linear(color), vec3<f32>(0.0)));
+    let lo = min(wide.r, min(wide.g, wide.b));
+    let hi = max(wide.r, max(wide.g, wide.b));
+    let out_lo = apply_curve(lo, adjustments.global.xmp_parametric_curve, adjustments.global.xmp_parametric_curve_count);
+    let out_hi = apply_curve(hi, adjustments.global.xmp_parametric_curve, adjustments.global.xmp_parametric_curve_count);
+    let mapped = vec3<f32>(out_lo) + (wide - vec3<f32>(lo)) * (out_hi - out_lo) / max(hi - lo, 0.000001);
+    return linear_to_srgb(max(from_romm * srgb_to_linear(mapped), vec3<f32>(0.0)));
+}
+
+fn reference_basic_response(value: f32) -> f32 {
+    let count = adjustments.global.reference_basic_curve_count;
+    if (count < 2u) { return value; }
+    if (value <= 1.0) {
+        return apply_curve(value, adjustments.global.reference_basic_curve, count);
+    }
+    // Preserve headroom beyond the measured SDR interval. Clamping here would
+    // discard recoverable RAW highlight detail before the tone mapper.
+    let last = adjustments.global.reference_basic_curve[count - 1u];
+    let previous = adjustments.global.reference_basic_curve[count - 2u];
+    let slope = max(0.0, (last.y - previous.y) / max(last.x - previous.x, 0.001));
+    return last.y / 255.0 + (value - 1.0) * slope;
+}
+
+fn apply_reference_basics(linear_rgb: vec3<f32>) -> vec3<f32> {
+    if (adjustments.global.reference_basic_curve_count < 2u) { return linear_rgb; }
+    let to_romm = mat3x3<f32>(
+        vec3<f32>(0.52934593, 0.09837434, 0.01688322),
+        vec3<f32>(0.33007280, 0.87346102, 0.11767247),
+        vec3<f32>(0.14058127, 0.02816463, 0.86544431));
+    let from_romm = mat3x3<f32>(
+        vec3<f32>(2.03407594, -0.22881332, -0.00856984),
+        vec3<f32>(-0.72733421, 1.23173016, -0.15328657),
+        vec3<f32>(-0.30674173, -0.00291684, 1.16185641));
+    let wide = linear_to_srgb_extended(max(to_romm * linear_rgb, vec3<f32>(0.0)));
+    let lo = min(wide.r, min(wide.g, wide.b));
+    let hi = max(wide.r, max(wide.g, wide.b));
+    let out_lo = reference_basic_response(lo);
+    let out_hi = reference_basic_response(hi);
+    let mapped = vec3<f32>(out_lo) + (wide - vec3<f32>(lo)) * (out_hi - out_lo) / max(hi - lo, 0.000001);
+    return max(from_romm * srgb_to_linear(mapped), vec3<f32>(0.0));
 }
 
 fn apply_tonal_adjustments(
@@ -1474,39 +1565,39 @@ fn get_mask_influence(mask_index: u32, coords: vec2<u32>) -> f32 {
     return textureLoad(mask_textures, vec2<i32>(coords), i32(mask_index), 0).r;
 }
 
-fn sample_lut_tetrahedral(uv: vec3<f32>) -> vec3<f32> {
-    let dims = vec3<f32>(textureDimensions(lut_texture));
+fn sample_lut_tetrahedral(uv: vec3<f32>, table: texture_3d<f32>) -> vec3<f32> {
+    let dims = vec3<f32>(textureDimensions(table));
     let size = dims - vec3<f32>(1.0);
     let scaled = clamp(uv, vec3<f32>(0.0), vec3<f32>(1.0)) * size;
     let i_base = floor(scaled);
     let f = scaled - i_base;
     let coord0 = vec3<i32>(i_base);
     let coord1 = min(coord0 + vec3<i32>(1), vec3<i32>(dims) - vec3<i32>(1));
-    let c000 = textureLoad(lut_texture, coord0, 0).rgb;
-    let c111 = textureLoad(lut_texture, coord1, 0).rgb;
+    let c000 = textureLoad(table, coord0, 0).rgb;
+    let c111 = textureLoad(table, coord1, 0).rgb;
 
     var res = vec3<f32>(0.0);
 
     if (f.r > f.g) {
         if (f.g > f.b) {
-            let c100 = textureLoad(lut_texture, vec3<i32>(coord1.x, coord0.y, coord0.z), 0).rgb;
-            let c110 = textureLoad(lut_texture, vec3<i32>(coord1.x, coord1.y, coord0.z), 0).rgb;
+            let c100 = textureLoad(table, vec3<i32>(coord1.x, coord0.y, coord0.z), 0).rgb;
+            let c110 = textureLoad(table, vec3<i32>(coord1.x, coord1.y, coord0.z), 0).rgb;
 
             res = c000 * (1.0 - f.r) +
                   c100 * (f.r - f.g) +
                   c110 * (f.g - f.b) +
                   c111 * (f.b);
         } else if (f.r > f.b) {
-            let c100 = textureLoad(lut_texture, vec3<i32>(coord1.x, coord0.y, coord0.z), 0).rgb;
-            let c101 = textureLoad(lut_texture, vec3<i32>(coord1.x, coord0.y, coord1.z), 0).rgb;
+            let c100 = textureLoad(table, vec3<i32>(coord1.x, coord0.y, coord0.z), 0).rgb;
+            let c101 = textureLoad(table, vec3<i32>(coord1.x, coord0.y, coord1.z), 0).rgb;
 
             res = c000 * (1.0 - f.r) +
                   c100 * (f.r - f.b) +
                   c101 * (f.b - f.g) +
                   c111 * (f.g);
         } else {
-            let c001 = textureLoad(lut_texture, vec3<i32>(coord0.x, coord0.y, coord1.z), 0).rgb;
-            let c101 = textureLoad(lut_texture, vec3<i32>(coord1.x, coord0.y, coord1.z), 0).rgb;
+            let c001 = textureLoad(table, vec3<i32>(coord0.x, coord0.y, coord1.z), 0).rgb;
+            let c101 = textureLoad(table, vec3<i32>(coord1.x, coord0.y, coord1.z), 0).rgb;
 
             res = c000 * (1.0 - f.b) +
                   c001 * (f.b - f.r) +
@@ -1515,24 +1606,24 @@ fn sample_lut_tetrahedral(uv: vec3<f32>) -> vec3<f32> {
         }
     } else {
         if (f.b > f.g) {
-            let c001 = textureLoad(lut_texture, vec3<i32>(coord0.x, coord0.y, coord1.z), 0).rgb;
-            let c011 = textureLoad(lut_texture, vec3<i32>(coord0.x, coord1.y, coord1.z), 0).rgb;
+            let c001 = textureLoad(table, vec3<i32>(coord0.x, coord0.y, coord1.z), 0).rgb;
+            let c011 = textureLoad(table, vec3<i32>(coord0.x, coord1.y, coord1.z), 0).rgb;
 
             res = c000 * (1.0 - f.b) +
                   c001 * (f.b - f.g) +
                   c011 * (f.g - f.r) +
                   c111 * (f.r);
         } else if (f.b > f.r) {
-            let c010 = textureLoad(lut_texture, vec3<i32>(coord0.x, coord1.y, coord0.z), 0).rgb;
-            let c011 = textureLoad(lut_texture, vec3<i32>(coord0.x, coord1.y, coord1.z), 0).rgb;
+            let c010 = textureLoad(table, vec3<i32>(coord0.x, coord1.y, coord0.z), 0).rgb;
+            let c011 = textureLoad(table, vec3<i32>(coord0.x, coord1.y, coord1.z), 0).rgb;
 
             res = c000 * (1.0 - f.g) +
                   c010 * (f.g - f.b) +
                   c011 * (f.b - f.r) +
                   c111 * (f.r);
         } else {
-            let c010 = textureLoad(lut_texture, vec3<i32>(coord0.x, coord1.y, coord0.z), 0).rgb;
-            let c110 = textureLoad(lut_texture, vec3<i32>(coord1.x, coord1.y, coord0.z), 0).rgb;
+            let c010 = textureLoad(table, vec3<i32>(coord0.x, coord1.y, coord0.z), 0).rgb;
+            let c110 = textureLoad(table, vec3<i32>(coord1.x, coord1.y, coord0.z), 0).rgb;
 
             res = c000 * (1.0 - f.g) +
                   c010 * (f.g - f.r) +
@@ -1859,6 +1950,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var composite_rgb_linear = apply_dehaze(processed_rgb, structure_blurred, dehaze_dark, is_raw, t_dehaze);
     composite_rgb_linear = apply_white_balance(composite_rgb_linear, t_wb_log_gains);
     composite_rgb_linear = apply_centre_tonal_and_color(composite_rgb_linear, adjustments.global.centre, absolute_coord_i);
+    if (adjustments.global.tonemapper_mode == 2u && is_raw == 1u) {
+        composite_rgb_linear = apply_reference_basics(composite_rgb_linear);
+        // The global reference curve already includes these controls. Local
+        // mask changes continue to use the native detail-aware adjustments.
+        t_contrast -= adjustments.global.contrast;
+        t_highlights -= adjustments.global.highlights;
+        t_shadows -= adjustments.global.shadows;
+        t_whites -= adjustments.global.whites;
+        t_blacks -= adjustments.global.blacks;
+    }
     var tonal_log_detail = 0.0;
     var tonal_mid_detail = 0.0;
     if (t_shadows != 0.0 || t_blacks != 0.0 || t_highlights != 0.0 || t_whites != 0.0) {
@@ -1917,6 +2018,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var default_tonemapped: vec3<f32>;
     if (adjustments.global.tonemapper_mode == 1u) {
         default_tonemapped = agx_full_transform(composite_rgb_linear);
+    } else if (adjustments.global.tonemapper_mode == 2u && is_raw == 1u) {
+        default_tonemapped = reference_base_tonemap(composite_rgb_linear);
     } else if (is_raw == 1u) {
         var srgb_emulated = linear_to_srgb(composite_rgb_linear);
         const BRIGHTNESS_GAMMA: f32 = 1.1;
@@ -1932,7 +2035,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     if (is_scene_lut) {
         let vlog_encoded = linear_to_vlog(composite_rgb_linear);
-        let lut_color = sample_lut_tetrahedral(vlog_encoded);
+        let lut_color = sample_lut_tetrahedral(vlog_encoded, lut_texture);
         base_srgb = mix(default_tonemapped, lut_color, adjustments.global.lut_intensity);
     } else {
         base_srgb = default_tonemapped;
@@ -1941,11 +2044,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     base_srgb = apply_filmic_exposure(base_srgb, t_brightness);
 
     if (adjustments.global.xmp_parametric_curve_count >= 2u) {
-        base_srgb = vec3<f32>(
+        if (adjustments.global.xmp_curve_version >= 2u) {
+            base_srgb = apply_imported_curve(base_srgb);
+        } else { base_srgb = vec3<f32>(
             apply_curve(base_srgb.r, adjustments.global.xmp_parametric_curve, adjustments.global.xmp_parametric_curve_count),
             apply_curve(base_srgb.g, adjustments.global.xmp_parametric_curve, adjustments.global.xmp_parametric_curve_count),
             apply_curve(base_srgb.b, adjustments.global.xmp_parametric_curve, adjustments.global.xmp_parametric_curve_count)
-        );
+        ); }
     }
 
     var final_rgb = apply_all_curves(base_srgb,
@@ -1969,8 +2074,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
 
+    if (adjustments.global.profile_lut_id != 0u && adjustments.global.profile_amount > 0.0) {
+        let profile_rgb = sample_lut_tetrahedral(final_rgb, profile_lut_texture);
+        final_rgb = clamp(mix(final_rgb, profile_rgb, adjustments.global.profile_amount), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+
     if (adjustments.global.has_lut == 1u && adjustments.global.lut_is_scene_referred == 0u) {
-        let lut_color = sample_lut_tetrahedral(final_rgb);
+        let lut_color = sample_lut_tetrahedral(final_rgb, lut_texture);
         final_rgb = mix(final_rgb, lut_color, adjustments.global.lut_intensity);
     }
 

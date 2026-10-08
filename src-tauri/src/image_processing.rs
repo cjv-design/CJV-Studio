@@ -1534,8 +1534,8 @@ pub struct GlobalAdjustments {
     pub lut_intensity: f32,
     pub tonemapper_mode: u32,
     pub lut_is_scene_referred: u32,
-    _pad_lut3: f32,
-    _pad_lut4: f32,
+    pub profile_lut_id: u32,
+    pub profile_amount: f32,
     _pad_lut5: f32,
 
     _pad_agx1: f32,
@@ -1562,9 +1562,13 @@ pub struct GlobalAdjustments {
     pub color_calibration: ColorCalibrationSettings,
 
     pub hsl: [HslColor; 8],
+    pub reference_basic_curve: [Point; 16],
+    pub reference_basic_curve_count: u32,
+    _pad_reference_curve: [u32; 3],
     pub xmp_parametric_curve: [Point; 16],
     pub xmp_parametric_curve_count: u32,
-    _pad_xmp_curve: [u32; 3],
+    pub xmp_curve_version: u32,
+    _pad_xmp_curve: [u32; 2],
     pub luma_curve: [Point; 16],
     pub red_curve: [Point; 16],
     pub green_curve: [Point; 16],
@@ -1913,7 +1917,7 @@ pub fn resolve_tonemapper_override(settings: &crate::AppSettings, is_raw: bool) 
             .as_deref()
             .unwrap_or("basic")
     };
-    Some(if tm == "agx" { 1 } else { 0 })
+    Some(match tm { "agx" => 1, "reference" => 2, _ => 0 })
 }
 
 pub fn resolve_tonemapper_override_from_handle(
@@ -2190,6 +2194,10 @@ fn get_global_adjustments_from_json(
         Vec::new()
     };
 
+    let luma_points = crate::imported_curve::prepare_points(&luma_points);
+    let red_points = crate::imported_curve::prepare_points(&red_points);
+    let green_points = crate::imported_curve::prepare_points(&green_points);
+    let blue_points = crate::imported_curve::prepare_points(&blue_points);
     let cg_obj = js_adjustments
         .get("colorGrading")
         .cloned()
@@ -2247,8 +2255,14 @@ fn get_global_adjustments_from_json(
         (0, 1.0, 0)
     };
 
+    let resolved_tonemapper = tonemapper_override.unwrap_or_else(|| match tone_mapper { "agx" => 1, "reference" => 2, _ => 0 });
+    let reference_raw = resolved_tonemapper == 2 && is_raw;
+    let reference_points = if reference_raw && is_visible("basic") {
+        crate::reference_basic::points(js_adjustments)
+    } else { Vec::new() };
+
     GlobalAdjustments {
-        exposure: get_val("basic", "exposure", SCALES.exposure, None),
+        exposure: get_val("basic", "exposure", if reference_raw { 1.0 } else { SCALES.exposure }, None),
         brightness: get_val("basic", "brightness", SCALES.brightness, None),
         contrast: get_val("basic", "contrast", SCALES.contrast, None),
         highlights: get_val("basic", "highlights", SCALES.highlights, None),
@@ -2334,11 +2348,10 @@ fn get_global_adjustments_from_json(
         has_lut,
         lut_intensity,
 
-        tonemapper_mode: tonemapper_override
-            .unwrap_or_else(|| if tone_mapper == "agx" { 1 } else { 0 }),
+        tonemapper_mode: resolved_tonemapper,
         lut_is_scene_referred,
-        _pad_lut3: 0.0,
-        _pad_lut4: 0.0,
+        profile_lut_id: 0,
+        profile_amount: 0.0,
         _pad_lut5: 0.0,
 
         _pad_agx1: 0.0,
@@ -2394,9 +2407,13 @@ fn get_global_adjustments_from_json(
             [HslColor::default(); 8]
         },
         luma_curve: convert_points_to_aligned(luma_points.clone()),
+        reference_basic_curve: convert_points_to_aligned(reference_points.clone()),
+        reference_basic_curve_count: reference_points.len() as u32,
+        _pad_reference_curve: [0; 3],
         xmp_parametric_curve: convert_points_to_aligned(xmp_points.clone()),
         xmp_parametric_curve_count: xmp_points.len() as u32,
-        _pad_xmp_curve: [0; 3],
+        xmp_curve_version: js_adjustments["xmpParametricCurve"]["version"].as_u64().unwrap_or(1).min(2) as u32,
+        _pad_xmp_curve: [0; 2],
         red_curve: convert_points_to_aligned(red_points.clone()),
         green_curve: convert_points_to_aligned(green_points.clone()),
         blue_curve: convert_points_to_aligned(blue_points.clone()),
@@ -2460,6 +2477,10 @@ fn get_mask_adjustments_from_json(
     } else {
         Vec::new()
     };
+    let luma_points = crate::imported_curve::prepare_points(&luma_points);
+    let red_points = crate::imported_curve::prepare_points(&red_points);
+    let green_points = crate::imported_curve::prepare_points(&green_points);
+    let blue_points = crate::imported_curve::prepare_points(&blue_points);
     let cg_obj = adj.get("colorGrading").cloned().unwrap_or_default();
     let [wb_log_gain_l, wb_log_gain_m, wb_log_gain_s] = if is_visible("color") {
         white_balance::adaptation_log_gains(
@@ -2571,12 +2592,28 @@ pub fn get_all_adjustments_from_json(
     } else {
         as_shot_white_balance
     };
-    let global = get_global_adjustments_from_json(
-        js_adjustments,
+    let imported_profile = if is_section_visible(js_adjustments, "color") {
+        crate::enhanced_profile::load_adjustment(&js_adjustments["xmpProfile"])
+    } else { None };
+    let reference_raw = is_raw && tonemapper_override.map_or(
+        js_adjustments["toneMapper"].as_str() == Some("reference"), |mode| mode == 2);
+    let effective = imported_profile.as_ref().map(|(_, amount, profile)|
+        crate::enhanced_profile::with_deltas(js_adjustments, profile, *amount, reference_raw));
+    let mut global = get_global_adjustments_from_json(
+        effective.as_ref().unwrap_or(js_adjustments),
         is_raw,
         white_balance::adaptation_log_gains(as_shot_white_balance, target_white_balance),
         tonemapper_override,
     );
+    if let Some((id, amount, profile)) = imported_profile {
+        global.profile_lut_id = if profile.table.is_some() { id } else { 0 };
+        global.profile_amount = amount;
+    } else if is_section_visible(js_adjustments, "color")
+        && js_adjustments["xmpProfile"].is_object()
+        && js_adjustments["xmpProfile"]["amount"].as_f64().unwrap_or(1.0) > 0.0 {
+        // Fail the render instead of silently exporting without a missing look.
+        global.profile_lut_id = u32::MAX;
+    }
     let mut mask_adjustments = [MaskAdjustments::default(); MAX_MASKS];
     let mut mask_count = 0;
 

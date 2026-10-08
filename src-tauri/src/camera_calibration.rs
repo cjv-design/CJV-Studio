@@ -34,7 +34,7 @@ pub fn initialize(directory: PathBuf) {
 
 pub fn revision() -> u64 {
     let mut hash = DefaultHasher::new();
-    "cjv-colour-0.1.2".hash(&mut hash);
+    "cjv-colour-0.1.3".hash(&mut hash);
     if let Some(records) = RECORDS.get() {
         records.hash(&mut hash);
     }
@@ -43,6 +43,7 @@ pub fn revision() -> u64 {
 
 #[derive(Clone, Debug)]
 pub struct CameraCalibration {
+    pub input_kind: String,
     pub color_a: Vec<f32>,
     pub color_d65: Vec<f32>,
     pub neutral: [f32; 3],
@@ -116,7 +117,10 @@ impl CameraCalibration {
         if value["schema"] != 1
             || value["sourceSha256"] != hash
             || value["model"] != model
-            || value["inputKind"] != "sony-linear-arw"
+            || !matches!(
+                value["inputKind"].as_str(),
+                Some("sony-linear-arw" | "sony-mosaic-arw")
+            )
             || value["enabled"] != true
         {
             return None;
@@ -141,6 +145,7 @@ impl CameraCalibration {
             return None;
         }
         Some(Self {
+            input_kind: value["inputKind"].as_str()?.to_string(),
             color_a: combined(calibration_a, matrix(&value["colorMatrix1"])?),
             color_d65: combined(calibration_d65, matrix(&value["colorMatrix2"])?),
             neutral: neutral.map(|v| v as f32),
@@ -250,5 +255,18 @@ mod tests {
                 .rendering_matrix(5000.0)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn mosaic_neutral_is_applied_once_and_layout_is_preserved() {
+        let mut v = fixture();
+        v["inputKind"] = serde_json::json!("sony-mosaic-arw");
+        v["asShotNeutral"] = serde_json::json!([0.45, 1.0, 0.70]);
+        let p = CameraCalibration::parse(&v, "test", "test").unwrap();
+        assert_eq!(p.input_kind, "sony-mosaic-arw");
+        let rgb = transform(p.rendering_matrix(5000.0).unwrap(), p.neutral);
+        assert!(rgb.iter().all(|v| (*v - 1.0).abs() < 0.001), "{rgb:?}");
+        v["inputKind"] = serde_json::json!("unknown");
+        assert!(CameraCalibration::parse(&v, "test", "test").is_none());
     }
 }

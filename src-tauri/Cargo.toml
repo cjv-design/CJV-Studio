@@ -60,6 +60,7 @@ memmap2 = "0.9.11"
 half = { version = "2.7.1", features = ["bytemuck"] }
 glam = "0.33.5"
 quick-xml = { version = "0.41", features = ["serialize"] }
+flate2 = "1.1"
 fuzzy-matcher = "0.3.7"
 image-hdr = { version = "0.6.0", default-features = false }
 mozjpeg-rs = "0.9.2"

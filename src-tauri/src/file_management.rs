@@ -3193,7 +3193,7 @@ fn collect_top_level_preset_names(items: &[PresetItem]) -> HashSet<String> {
         .collect()
 }
 
-fn parse_preset_file(file_path: &str) -> Result<Vec<PresetItem>, String> {
+fn parse_preset_file(file_path: &str, app_handle: &AppHandle) -> Result<Vec<PresetItem>, String> {
     let lower_path = file_path.to_lowercase();
     let is_legacy = lower_path.ends_with(".xmp") || lower_path.ends_with(".lrtemplate");
 
@@ -3220,7 +3220,31 @@ fn parse_preset_file(file_path: &str) -> Result<Vec<PresetItem>, String> {
         content
     };
 
-    let converted_preset = preset_converter::convert_xmp_to_preset(&xmp_content)?;
+    let mut converted_preset = preset_converter::convert_xmp_to_preset(&xmp_content)?;
+    let mut roots = Vec::new();
+    if let Some(parent) = std::path::Path::new(file_path).parent() { roots.push(parent.to_path_buf()); }
+    if let Some(roaming) = std::env::var_os("APPDATA") {
+        roots.push(std::path::PathBuf::from(roaming).join("Adobe/CameraRaw/Settings"));
+    }
+    if let Ok(home) = app_handle.path().home_dir() {
+        roots.push(home.join("Library/Application Support/Adobe/CameraRaw/Settings"));
+    }
+    let cache = app_handle.path().app_data_dir().map_err(|e| e.to_string())?.join("imported-profiles");
+    match crate::enhanced_profile::import_reference(&xmp_content, &roots, &cache) {
+        Ok(Some(profile)) => {
+            converted_preset.adjustments["xmpProfile"] = profile;
+            if let Some(notes) = converted_preset.adjustments["xmpImportNotes"].as_array_mut() {
+                notes.retain(|v| !v.as_str().is_some_and(|s| s.starts_with("The Adobe film profile is not applied.")));
+                notes.push(serde_json::json!("Film profile imported from this computer. Camera colour and tone rendering still differ from Lightroom."));
+            }
+        }
+        Err(reason) => {
+            if let Some(notes) = converted_preset.adjustments["xmpImportNotes"].as_array_mut() {
+                notes.push(serde_json::json!(format!("Film profile: {reason}.")));
+            }
+        }
+        Ok(None) => {}
+    }
     Ok(vec![PresetItem::Preset(converted_preset)])
 }
 
@@ -3265,7 +3289,7 @@ fn import_preset_file_into_library(
     file_path: &str,
     app_handle: AppHandle,
 ) -> Result<Vec<PresetItem>, String> {
-    let imported = parse_preset_file(file_path)?;
+    let imported = parse_preset_file(file_path, &app_handle)?;
 
     let mut current_presets = load_presets(app_handle.clone())?;
     let mut taken_names = collect_top_level_preset_names(&current_presets);
@@ -3303,7 +3327,7 @@ pub fn handle_import_presets_from_files(
     let mut library_changed = false;
 
     for file_path in &file_paths {
-        match parse_preset_file(file_path) {
+        match parse_preset_file(file_path, &app_handle) {
             Ok(imported) => {
                 library_changed |= !imported.is_empty();
                 merge_imported_items(&mut current_presets, &mut taken_names, imported);

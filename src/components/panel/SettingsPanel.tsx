@@ -2365,7 +2365,13 @@ export default function SettingsPanel({
                                     onChange={(value: any) =>
                                       onSettingsChange({ ...appSettings, defaultRawTonemapper: value })
                                     }
-                                    options={tonemapperOptions}
+                                    options={[
+                                      ...tonemapperOptions,
+                                      {
+                                        value: 'reference',
+                                        label: t('adjustments.basic.mappers.reference', { defaultValue: 'Reference' }),
+                                      },
+                                    ]}
                                     value={appSettings?.defaultRawTonemapper || 'agx'}
                                     triggerClassName="bg-bg-primary"
                                   />

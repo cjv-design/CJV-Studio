@@ -164,7 +164,14 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
     }
 
     if let Some(shadows_val) = get_attr_as_f64(&attrs, "Shadows2012") {
-        let adjusted_shadows = (shadows_val * 1.5).min(100.0);
+        // Reference controls use the actual -100..100 Adobe range. Applying
+        // the legacy native 1.5 scale would clip the upper third of the range.
+        let scale = if attrs.contains_key("ProcessVersion") {
+            1.0
+        } else {
+            1.5
+        };
+        let adjusted_shadows = (shadows_val * scale).clamp(-100.0, 100.0);
         adjustments.insert("shadows".to_string(), json!(adjusted_shadows));
     }
 
@@ -362,6 +369,10 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
         extract_xmp_name(&preset_content).unwrap_or_else(|| "Imported Preset".to_string());
 
     let mut import_notes = Vec::new();
+    if attrs.contains_key("ProcessVersion") {
+        adjustments.insert("toneMapper".into(), json!("reference"));
+        import_notes.push("Reference tone rendering approximates Adobe's RAW tone response. Camera colour profiles and local adjustments may still differ.");
+    }
     if xmp_content.contains("<crs:Look") || attrs.contains_key("RGBTable") {
         import_notes
             .push("The Adobe film profile is not applied. Colours will differ from Lightroom.");
@@ -399,8 +410,9 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
     .any(|key| attrs.contains_key(*key))
     {
         parametric.insert("amount".into(), json!(1.0));
+        parametric.insert("version".into(), json!(2));
         adjustments.insert("xmpParametricCurve".into(), Value::Object(parametric));
-        import_notes.push("The imported tone curve uses CJV's response and is approximate. Its strength is adjustable under Curves.");
+        import_notes.push("The imported tone curve uses a measured approximation. Its strength is adjustable under Curves.");
     }
     if !import_notes.is_empty() {
         adjustments.insert("xmpImportNotes".to_string(), json!(import_notes));
@@ -418,6 +430,20 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reference_shadows_preserve_the_complete_lightroom_range() {
+        for value in [-100, -80, 46, 80, 100] {
+            let xmp = format!(
+                r#"<rdf:Description crs:ProcessVersion="15.4" crs:Shadows2012="{value}"/>"#
+            );
+            let result = super::convert_xmp_to_preset(&xmp).unwrap();
+            assert_eq!(
+                result.adjustments["shadows"],
+                serde_json::json!(value as f64)
+            );
+            assert_eq!(result.adjustments["toneMapper"], "reference");
+        }
+    }
     use super::*;
 
     #[test]

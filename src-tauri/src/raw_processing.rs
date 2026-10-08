@@ -66,15 +66,18 @@ fn source_calibration(
     raw: &RawImage,
     decoder: &dyn Decoder,
 ) -> Option<crate::camera_calibration::CameraCalibration> {
-    // The preparation tool currently validates reduced-resolution Sony ARWs.
-    // Never apply their baked-WB metadata to mosaic ARWs, DNGs or other cameras.
-    if !is_linear_raw_format(raw)
-        || raw.cpp != 3
-        || decoder.format_hint() != rawler::decoders::FormatHint::ARW
-    {
+    // Calibration is specific to both the exact source and its pixel layout.
+    // Linear Sony ARWs have baked WB; mosaic ARWs require the camera neutral.
+    if decoder.format_hint() != rawler::decoders::FormatHint::ARW {
         return None;
     }
+    let kind = if is_linear_raw_format(raw) && raw.cpp == 3 {
+        "sony-linear-arw"
+    } else if matches!(raw.photometric, RawPhotometricInterpretation::Cfa(_)) && raw.cpp == 1 {
+        "sony-mosaic-arw"
+    } else { return None; };
     crate::camera_calibration::load(&hex::encode(Sha256::digest(bytes)), &raw.model)
+        .filter(|p| p.input_kind == kind)
 }
 
 fn calibrated_white_balance(

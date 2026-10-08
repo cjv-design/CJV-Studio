@@ -7,7 +7,13 @@ import { motion } from 'framer-motion';
 import clsx from 'clsx';
 import Slider from '../ui/Slider';
 import Switch from '../ui/Switch';
-import { Adjustments, Effect, CreativeAdjustment, getAdjustmentToolOrder, getHiddenAdjustmentTools } from '../../utils/adjustments';
+import {
+  Adjustments,
+  Effect,
+  CreativeAdjustment,
+  getAdjustmentToolOrder,
+  getHiddenAdjustmentTools,
+} from '../../utils/adjustments';
 import LUTControl from '../ui/LUTControl';
 import { AppSettings } from '../ui/AppProperties';
 import Text from '../ui/Text';
@@ -351,7 +357,7 @@ export default function EffectsPanel({
               <LUTControl
                 lutPath={adjustments.lutPath || null}
                 lutName={adjustments.lutName || null}
-                lutIntensity={adjustments.lutIntensity || 100}
+                lutIntensity={adjustments.lutIntensity ?? 100}
                 onLutSelect={handleLutSelect}
                 onLutHover={onLutHover}
                 onIntensityChange={handleLutIntensityChange}

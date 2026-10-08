@@ -57,6 +57,8 @@ mod negative_conversion;
 mod panorama_stitching;
 mod panorama_utils;
 mod preset_converter;
+mod enhanced_profile;
+mod reference_basic;
 mod raw_processing;
 mod sony_white_balance;
 mod tagging;
@@ -2411,14 +2413,15 @@ pub fn run() {
 				        }
 				    }
 				}
-                tauri::RunEvent::ExitRequested { api, .. } => {
+                tauri::RunEvent::ExitRequested { api, code, .. } => {
                     api.prevent_exit();
+                    let exit_code = code.unwrap_or(0);
 
                     #[cfg(target_os = "macos")]
-                    unsafe { libc::_exit(0); }
+                    unsafe { libc::_exit(exit_code); }
 
                     #[cfg(not(target_os = "macos"))]
-                    std::process::exit(0);
+                    std::process::exit(exit_code);
                 }
                 tauri::RunEvent::Exit => {
                     #[cfg(target_os = "macos")]
